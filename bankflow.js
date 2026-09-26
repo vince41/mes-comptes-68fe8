@@ -12,6 +12,7 @@ function calendarMonth(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
 }
 function migrateBankFlow(out, source){
+  const hadBankFlow=!!source?.bankFlowV1;
   const anchor=source?.flowAnchorMonth||calendarMonth();
   out.version=5.5;
   out.flowAnchorMonth=anchor;
@@ -19,7 +20,7 @@ function migrateBankFlow(out, source){
   out.settings=out.settings||{};
   out.settings.Vincent={closeDay:25,debitDay:4,...(out.settings.Vincent||{})};
   out.settings.Lili={closeDay:25,debitDay:4,...(out.settings.Lili||{})};
-  if(!source?.bankFlowV1){
+  if(!hadBankFlow){
     out.transactions=(out.transactions||[]).map(t=>{
       if(t?.source==='LibreOffice' && t.month>anchor){
         if(t.type==='income') return {...t,incomeStatus:'expected'};
