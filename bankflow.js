@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BANKFLOW_VERSION='0.5.5';
+const BANKFLOW_VERSION='0.5.6';
 const oldDefaultState=defaultState;
 const oldNormalizeState=normalizeState;
 const oldSummary=summary;
@@ -14,7 +14,7 @@ function calendarMonth(){
 function migrateBankFlow(out, source){
   const hadBankFlow=!!source?.bankFlowV1;
   const anchor=source?.flowAnchorMonth||calendarMonth();
-  out.version=5.5;
+  out.version=5.6;
   out.flowAnchorMonth=anchor;
   out.bankFlowV1=true;
   out.settings=out.settings||{};
