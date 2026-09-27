@@ -75,9 +75,9 @@ fixedProjectionTemplates=function(){
 function cardPart(t,who){
   if(t?.type!=='expense') return 0;
   const sv=Number(t.splitVincent||0),sl=Number(t.splitLili||0);
+  if(t.paymentMethod==='card_deferred'&&(t.cardOwner==='Vincent'||t.cardOwner==='Lili')) return t.cardOwner===who?Number(t.amount||0):0;
   if(t.source==='LibreOffice') return who==='Vincent'?sv:sl;
   if(t.paymentMethod!=='card_deferred') return 0;
-  if(t.cardOwner==='Vincent'||t.cardOwner==='Lili') return t.cardOwner===who?Number(t.amount||0):0;
   if(sv||sl) return who==='Vincent'?sv:sl;
   return t.owner===who?Number(t.amount||0):0;
 }
