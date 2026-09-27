@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const GROUPING_VERSION='0.5.7';
+const GROUPING_VERSION='0.5.12.1';
 let groupingMode=localStorage.getItem('mes-comptes-list-mode')||'grouped';
 const expandedGroups=new Set();
 
