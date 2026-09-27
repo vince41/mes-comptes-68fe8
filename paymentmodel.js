@@ -198,8 +198,6 @@ if(saveBtn){
       return;
     }
 
-    ensureCommunSplit();
-
     const editId=document.getElementById('editId')?.value||'';
     const beforeIds=new Set((state.transactions||[]).map(t=>t.id));
     const count=Math.max(1,Math.min(12,Number(document.getElementById('bankPartCount')?.value||1)));
@@ -210,8 +208,8 @@ if(saveBtn){
     const repeatedUnit=(method==='direct_debit'&&count>1&&!installment&&partMode==='repeat_each')?enteredAmount:0;
     if(repeatedUnit>0&&amountEl){
       amountEl.value=String(money(repeatedUnit*count));
-      ensureCommunSplit();
     }
+    ensureCommunSplit();
 
     setTimeout(()=>{
       if(document.getElementById('txDialog')?.open){
