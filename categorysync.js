@@ -1,7 +1,8 @@
 (function(){
 'use strict';
-const CATEGORY_SYNC_VERSION='0.5.11';
+const CATEGORY_SYNC_VERSION='0.5.12';
 const RULES_KEY='mes-comptes-category-rules-v2';
+const MIGRATION_KEY='mes-comptes-category-migration-v0512';
 
 function clean(v){return String(v||'').trim().replace(/\s+/g,' ');}
 function norm(v){return clean(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
@@ -10,9 +11,7 @@ function loadRules(){
   try{const x=JSON.parse(localStorage.getItem(RULES_KEY)||'[]');return Array.isArray(x)?x:[];}
   catch(e){return [];}
 }
-function saveRules(rules){
-  localStorage.setItem(RULES_KEY,JSON.stringify(rules));
-}
+function saveRules(rules){localStorage.setItem(RULES_KEY,JSON.stringify(rules));}
 function identityKeys(t){
   const keys=[];
   if(t?.installmentGroup)keys.push('install:'+t.installmentGroup);
@@ -30,18 +29,19 @@ function ruleFor(t){
   const keys=identityKeys(t);
   const rules=loadRules();
   for(const key of keys){
-    const r=rules.find(x=>x.key===key && (!x.fromMonth||month>=x.fromMonth));
-    if(r&&r.category)return r;
+    const matches=rules
+      .filter(x=>x.key===key && (!x.fromMonth||month>=x.fromMonth) && x.category)
+      .sort((a,b)=>String(b.fromMonth||'').localeCompare(String(a.fromMonth||'')));
+    if(matches.length)return matches[0];
   }
   return null;
 }
 function rememberRule(t,category,fromMonth){
   category=clean(category); if(!t||!category)return;
-  const rules=loadRules();
-  const keys=identityKeys(t);
-  for(const key of keys){
-    const next={key,category,fromMonth:String(fromMonth||t.month||''),updatedAt:new Date().toISOString()};
-    const i=rules.findIndex(x=>x.key===key);
+  const rules=loadRules(), start=String(fromMonth||t.month||'');
+  for(const key of identityKeys(t)){
+    const next={key,category,fromMonth:start,updatedAt:new Date().toISOString()};
+    const i=rules.findIndex(x=>x.key===key && String(x.fromMonth||'')===start);
     if(i>=0)rules[i]=next; else rules.push(next);
   }
   saveRules(rules);
@@ -73,11 +73,32 @@ function toast(msg){
   try{
     const n=document.createElement('div');n.textContent=msg;
     n.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:100000;background:#082f50;color:#eaf8ff;border:1px solid #2d6b97;border-radius:12px;padding:9px 12px;font:700 13px system-ui;box-shadow:0 6px 18px #0008;max-width:90vw;text-align:center';
-    document.body.appendChild(n);setTimeout(()=>n.remove(),2400);
+    document.body.appendChild(n);setTimeout(()=>n.remove(),2600);
   }catch(e){}
 }
 
 const previousAutoCategory=autoCategory;
+
+function migrateLegacyManualCategories(){
+  if(localStorage.getItem(MIGRATION_KEY)==='done')return 0;
+  const rows=(state.transactions||[])
+    .filter(t=>t?.type==='expense'&&(t.installmentGroup||t.seriesId||t.recurring))
+    .sort((a,b)=>String(a.month||'').localeCompare(String(b.month||''))||String(a.date||'').localeCompare(String(b.date||'')));
+  let found=0;
+  for(const t of rows){
+    const current=clean(t.category);
+    if(!current)continue;
+    const automatic=clean(previousAutoCategory(t));
+    if(current.toLocaleLowerCase('fr-FR')!==automatic.toLocaleLowerCase('fr-FR')){
+      rememberRule(t,current,t.month||'');
+      t.manualCategory=true;
+      found++;
+    }
+  }
+  localStorage.setItem(MIGRATION_KEY,'done');
+  return found;
+}
+
 autoCategory=function(t){
   const r=ruleFor(t);
   return r?.category||previousAutoCategory(t);
@@ -115,6 +136,7 @@ if(btn){
     }
     if(!base)return;
 
+    base.manualCategory=true;
     rememberRule(base,selected,base.month||state.currentMonth);
     const changed=applyRules();
     persistState();
@@ -130,8 +152,13 @@ if(btn){
   };
 }
 
+const migrated=migrateLegacyManualCategories();
 const initialChanged=applyRules();
-if(initialChanged)persistState();
+if(migrated||initialChanged)persistState();
 setVersion();
-setTimeout(()=>{setVersion(); if(typeof render==='function')render();},250);
+setTimeout(()=>{
+  setVersion();
+  if(typeof render==='function')render();
+  if(migrated)toast(migrated+' ancien'+(migrated>1?'s choix de catégorie récupérés':' choix de catégorie récupéré')+'.');
+},300);
 })();
