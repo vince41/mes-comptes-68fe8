@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.21';
+const PAYMENT_MODEL_VERSION='0.5.22';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -21,6 +21,15 @@ function ensureUI(){
 
   const firstRow=method.closest('.fields2');
   if(!firstRow)return;
+
+  const methodLabel=method.closest('label');
+  if(methodLabel)methodLabel.style.display='none';
+
+  const sourceWrap=document.createElement('div');
+  sourceWrap.id='debitSourceWrap';
+  sourceWrap.className='fields2';
+  sourceWrap.innerHTML='<label><span>Débité via</span><select id="debitSource"><option value="account_direct">Compte direct / prélèvement</option><option value="card_vincent">Carte différée Vincent</option><option value="card_lili">Carte différée Lili</option></select><small>Choisis où la dépense sera réellement débitée.</small></label>';
+  firstRow.insertAdjacentElement('beforebegin',sourceWrap);
 
   const wrap=document.createElement('div');
   wrap.id='paymentRoutingFields';
@@ -47,6 +56,11 @@ function ensureUI(){
     else if(method.value==='direct_debit'&&!debitMonthTouched){
       const dm=document.getElementById('debitMonth');if(dm)dm.value=state.currentMonth;
     }
+  });
+  document.getElementById('debitSource')?.addEventListener('change',()=>{
+    applySourceToLegacyFields();
+    syncUI();
+    updateDebitMonth(true);
   });
   document.getElementById('cardOwner')?.addEventListener('change',()=>updateDebitMonth(true));
   document.getElementById('bankPartCount')?.addEventListener('input',updatePreview);
@@ -83,8 +97,8 @@ function updatePreview(){
   const box=document.getElementById('bankPartsPreview');
   const countEl=document.getElementById('bankPartCount');
   const amountEl=document.getElementById('amount');
-  const method=document.getElementById('paymentMethod');
-  if(!box||!countEl||!amountEl||method?.value!=='direct_debit'){if(box)box.style.display='none';return;}
+  const source=document.getElementById('debitSource')?.value||'account_direct';
+  if(!box||!countEl||!amountEl||source!=='account_direct'){if(box)box.style.display='none';return;}
   const n=Math.max(1,Math.min(12,Number(countEl.value||1)));
   const amount=num(amountEl.value);
   if(n<=1||amount<=0){box.style.display='none';return;}
@@ -101,21 +115,44 @@ function syncUI(){
   const install=!!document.getElementById('installBox')?.checked;
   const cw=document.getElementById('cardOwnerWrap');
   const bw=document.getElementById('bankPartsWrap');
-  if(cw)cw.style.display=method==='card_deferred'?'grid':'none';
-  if(bw)bw.style.display=method==='direct_debit'&&!install?'grid':'none';
+  if(cw)cw.style.display='none';
+  const source=document.getElementById('debitSource')?.value||'account_direct';
+  if(bw)bw.style.display=source==='account_direct'&&!install?'grid':'none';
   updatePreview();
 }
 
+function sourceFromTx(t){
+  if(t?.paymentMethod==='card_deferred'){
+    const card=inferCardOwner(t);
+    return card==='Lili'?'card_lili':'card_vincent';
+  }
+  return 'account_direct';
+}
+function applySourceToLegacyFields(){
+  const source=document.getElementById('debitSource')?.value||'account_direct';
+  const method=document.getElementById('paymentMethod');
+  const card=document.getElementById('cardOwner');
+  if(source==='card_vincent'){
+    if(method)method.value='card_deferred';
+    if(card)card.value='Vincent';
+  }else if(source==='card_lili'){
+    if(method)method.value='card_deferred';
+    if(card)card.value='Lili';
+  }else{
+    if(method)method.value='direct_debit';
+    if(card)card.value='';
+  }
+}
 function updateDebitMonth(force){
-  const method=document.getElementById('paymentMethod')?.value;
+  const source=document.getElementById('debitSource')?.value||'account_direct';
   const dm=document.getElementById('debitMonth');
   if(!dm)return;
-  if(method==='card_deferred'){
-    const card=document.getElementById('cardOwner')?.value;
+  if(source==='card_vincent'||source==='card_lili'){
+    const card=source==='card_lili'?'Lili':'Vincent';
     const date=document.getElementById('date')?.value;
-    if(!card||!date)return;
+    if(!date)return;
     if(force||!debitMonthTouched)dm.value=predictedDebitMonth(date,card);
-  }else if(method==='direct_debit'&&(force||!debitMonthTouched)){
+  }else if(force||!debitMonthTouched){
     dm.value=state.currentMonth;
   }
 }
@@ -170,10 +207,13 @@ openTx=function(type,t=null){
   ensureUI();
   if(type!=='expense')return;
   const card=document.getElementById('cardOwner');
+  const source=document.getElementById('debitSource');
   const count=document.getElementById('bankPartCount');
   const mode=document.getElementById('bankPartMode');
   const amountEl=document.getElementById('amount');
-  if(card)card.value=t?inferCardOwner(t):(document.getElementById('owner')?.value==='Lili'?'Lili':'Vincent');
+  if(source)source.value=t?sourceFromTx(t):'account_direct';
+  if(card)card.value=t?inferCardOwner(t):'';
+  applySourceToLegacyFields();
   if(count)count.value=Array.isArray(t?.bankParts)&&t.bankParts.length?t.bankParts.length:1;
   if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':'split_total';
   if(t?.bankPartMode==='repeat_each'&&amountEl){
@@ -190,8 +230,10 @@ if(saveBtn){
     if(document.getElementById('txType')?.value!=='expense')return;
     ensureUI();
 
+    applySourceToLegacyFields();
+    const source=document.getElementById('debitSource')?.value||'account_direct';
     const method=document.getElementById('paymentMethod')?.value;
-    const cardOwner=document.getElementById('cardOwner')?.value||'';
+    const cardOwner=source==='card_lili'?'Lili':source==='card_vincent'?'Vincent':'';
     if(method==='card_deferred'&&!cardOwner){
       e.preventDefault();e.stopImmediatePropagation();
       alert('Choisis Carte Vincent ou Carte Lili pour un paiement en débit différé.');
