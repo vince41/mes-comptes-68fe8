@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const GROUPING_VERSION='0.5.23';
+const GROUPING_VERSION='0.5.25';
 let groupingMode=localStorage.getItem('mes-comptes-list-mode')||'grouped';
 const expandedGroups=new Set();
 
@@ -59,7 +59,9 @@ function expenseRow(t){
   if(typeof window.MesComptesExpenseActions==='function'){const custom=window.MesComptesExpenseActions(t);if(custom)actions=custom;}
   const sourceTxt=t.paymentMethod==='card_deferred'?('Carte différée '+(t.cardOwner||t.owner||'')):(t.paymentMethod==='direct_debit'?'Prélèvement compte':paymentLabel(t.paymentMethod));
   const multiTxt=multi?` · ${passed}/${parts.length} passages validés`:'';
-  row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(sourceTxt)}${multiTxt} · ${esc(txMeta(t))}</div><div class="who-line">Source : ${esc(sourceTxt)} · Concerne : ${esc(concernLabel(t))}</div>${splitDetailHtml(t)}<div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
+  const sourceLine=`<div class="who-line">Source : ${esc(sourceTxt)}</div>`;
+  const splitLine=t.paymentMethod==='card_deferred'?splitDetailHtml(t):'';
+  row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(sourceTxt)}${multiTxt} · ${esc(txMeta(t))}</div>${sourceLine}${splitLine}<div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
   return row;
 }
 function makeGroups(arr){
