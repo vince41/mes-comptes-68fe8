@@ -178,4 +178,5 @@ document.body.addEventListener('click',e=>{
 },true);
 
 window.MesComptesDebitParts={buildParts,passedCount};
+if(typeof render==='function')render();
 })();
