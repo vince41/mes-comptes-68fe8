@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BANKFLOW_VERSION='0.5.6';
+const BANKFLOW_VERSION='0.5.12.1';
 const oldDefaultState=defaultState;
 const oldNormalizeState=normalizeState;
 const oldSummary=summary;
