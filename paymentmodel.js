@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.24';
+const PAYMENT_MODEL_VERSION='0.5.25';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -44,11 +44,14 @@ function ensureUI(){
   prev.style.cssText='display:none;margin:-2px 0 10px;padding:9px 11px;border:1px solid #245b7f;border-radius:10px;background:#06233b;color:#b9d9ec;font-size:.78rem';
   wrap.insertAdjacentElement('afterend',prev);
 
-  const ownerLabel=document.getElementById('owner')?.closest('label');
-  if(ownerLabel){
-    const span=ownerLabel.querySelector('span');
-    if(span)span.textContent='Qui est concerné par la dépense ?';
+  const owner=document.getElementById('owner');
+  if(owner&&!owner.querySelector('option[value="Compte"]')){
+    const o=document.createElement('option');o.value='Compte';o.textContent='Compte direct';owner.appendChild(o);
   }
+  const ownerLabel=owner?.closest('label');
+  if(ownerLabel)ownerLabel.style.display='none';
+  const splitRow=document.getElementById('splitV')?.closest('.fields2');
+  if(splitRow)splitRow.style.display='none';
 
   method.addEventListener('change',()=>{
     syncUI();
@@ -148,15 +151,28 @@ function applySourceToLegacyFields(){
   const source=document.getElementById('debitSource')?.value||'account_direct';
   const method=document.getElementById('paymentMethod');
   const card=document.getElementById('cardOwner');
+  const owner=document.getElementById('owner');
+  const v=document.getElementById('splitV');
+  const l=document.getElementById('splitL');
+  const amount=money(num(document.getElementById('amount')?.value));
   if(source==='card_vincent'){
     if(method)method.value='card_deferred';
     if(card)card.value='Vincent';
+    if(owner)owner.value='Vincent';
+    if(v)v.value=amount?String(amount):'';
+    if(l)l.value='';
   }else if(source==='card_lili'){
     if(method)method.value='card_deferred';
     if(card)card.value='Lili';
+    if(owner)owner.value='Lili';
+    if(v)v.value='';
+    if(l)l.value=amount?String(amount):'';
   }else{
     if(method)method.value='direct_debit';
     if(card)card.value='';
+    if(owner)owner.value='Compte';
+    if(v)v.value='';
+    if(l)l.value='';
   }
 }
 function updateDebitMonth(force){
@@ -173,23 +189,7 @@ function updateDebitMonth(force){
   }
 }
 
-function ensureCommunSplit(){
-  if(document.getElementById('txType')?.value!=='expense')return;
-  if(document.getElementById('owner')?.value!=='Commun')return;
-  const amount=money(num(document.getElementById('amount')?.value));
-  if(!(amount>0))return;
-  const v=document.getElementById('splitV'),l=document.getElementById('splitL');
-  if(!v||!l)return;
-  const vr=clean(v.value),lr=clean(l.value);
-  if(!vr&&!lr){
-    const vc=Math.floor(cents(amount)/2),lc=cents(amount)-vc;
-    v.value=(vc/100).toFixed(2);l.value=(lc/100).toFixed(2);
-  }else if(vr&&!lr){
-    const rest=money(amount-num(vr));if(rest>=0)l.value=rest.toFixed(2);
-  }else if(!vr&&lr){
-    const rest=money(amount-num(lr));if(rest>=0)v.value=rest.toFixed(2);
-  }
-}
+function ensureCommunSplit(){ applySourceToLegacyFields(); }
 
 function cardBatchAmounts(amount,count,mode){
   return mode==='repeat_each'
@@ -305,8 +305,17 @@ if(saveBtn){
 
       const extra=[];
       for(const t of targets){
-        if(method==='card_deferred')t.cardOwner=cardOwner;
-        else delete t.cardOwner;
+        t.debitSource=source;
+        if(source==='card_vincent'){
+          t.paymentMethod='card_deferred';t.cardOwner='Vincent';t.owner='Vincent';
+          t.splitVincent=Number(t.amount||0);t.splitLili=0;
+        }else if(source==='card_lili'){
+          t.paymentMethod='card_deferred';t.cardOwner='Lili';t.owner='Lili';
+          t.splitVincent=0;t.splitLili=Number(t.amount||0);
+        }else{
+          t.paymentMethod='direct_debit';delete t.cardOwner;t.owner='Compte';
+          t.splitVincent=0;t.splitLili=0;
+        }
 
         if(method==='direct_debit'&&count>1&&!installment){
           if(partMode==='repeat_each'&&repeatedUnit>0){
@@ -319,6 +328,7 @@ if(saveBtn){
             delete t.bankPartUnitAmount;
             t.bankParts=makeBankParts(t.amount,count,t.bankParts,'split_total',0);
           }
+          t.owner='Compte';t.splitVincent=0;t.splitLili=0;delete t.cardOwner;t.paymentMethod='direct_debit';
           recalcDebited(t);
         }else if(method==='card_deferred'&&count>1&&!installment){
           const originalAmount=Number(t.amount||enteredAmount||0);
@@ -328,12 +338,16 @@ if(saveBtn){
           amounts.forEach((a,i)=>{
             const row=i===0?t:{...t,id:uid(),debitedAmount:0};
             row.amount=money(a);
+            row.paymentMethod='card_deferred';
             row.cardOwner=cardOwner;
+            row.debitSource=source;
+            row.owner=cardOwner;
+            row.splitVincent=cardOwner==='Vincent'?money(a):0;
+            row.splitLili=cardOwner==='Lili'?money(a):0;
             row.cardBatchGroup=group;
             row.cardBatchIndex=i+1;
             row.cardBatchCount=count;
             row.cardBatchMode=partMode;
-            applyConcernSplit(row,a,originalAmount,originalV,originalL);
             delete row.bankParts;delete row.bankPartMode;delete row.bankPartUnitAmount;
             if(i>0)extra.push(row);
           });
@@ -432,6 +446,18 @@ document.body.addEventListener('click',e=>{
     persist();if(typeof render==='function')render();
   }
 },true);
+
+let sourceMigrationChanged=false;
+for(const t of state.transactions||[]){
+  if(t?.type!=='expense')continue;
+  if(t.paymentMethod==='direct_debit'||t.debitSource==='account_direct'){
+    if(t.owner!=='Compte'||Number(t.splitVincent||0)!==0||Number(t.splitLili||0)!==0||t.cardOwner){
+      t.paymentMethod='direct_debit';t.debitSource='account_direct';t.owner='Compte';
+      t.splitVincent=0;t.splitLili=0;delete t.cardOwner;sourceMigrationChanged=true;
+    }
+  }
+}
+if(sourceMigrationChanged)persist();
 
 syncUI();
 if(typeof render==='function')render();
