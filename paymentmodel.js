@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.20';
+const PAYMENT_MODEL_VERSION='0.5.21';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -27,7 +27,7 @@ function ensureUI(){
   wrap.className='fields2';
   wrap.innerHTML=
     '<label id="cardOwnerWrap"><span>Carte débit différé utilisée</span><select id="cardOwner"><option value="">Choisir la carte</option><option value="Vincent">Carte Vincent</option><option value="Lili">Carte Lili</option></select><small>Indépendant de la personne concernée par la dépense.</small></label>'+
-    '<label id="bankPartsWrap"><span>Nombre de prélèvements sur le compte</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><small>Ex. 25,98 € avec 2 prélèvements = 2 × 12,99 €.</small></label>';
+    '<label id="bankPartsWrap"><span>Nombre de prélèvements sur le compte</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><span style="margin-top:7px">Calcul des prélèvements</span><select id="bankPartMode"><option value="split_total">Répartir le montant total</option><option value="repeat_each">Répéter ce montant à chaque prélèvement</option></select><small>Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.</small></label>';
   firstRow.insertAdjacentElement('afterend',wrap);
 
   const prev=document.createElement('div');
@@ -50,6 +50,7 @@ function ensureUI(){
   });
   document.getElementById('cardOwner')?.addEventListener('change',()=>updateDebitMonth(true));
   document.getElementById('bankPartCount')?.addEventListener('input',updatePreview);
+  document.getElementById('bankPartMode')?.addEventListener('change',updatePreview);
   document.getElementById('amount')?.addEventListener('input',updatePreview);
   document.getElementById('date')?.addEventListener('change',()=>updateDebitMonth(false));
   document.getElementById('installBox')?.addEventListener('change',syncUI);
@@ -87,9 +88,11 @@ function updatePreview(){
   const n=Math.max(1,Math.min(12,Number(countEl.value||1)));
   const amount=num(amountEl.value);
   if(n<=1||amount<=0){box.style.display='none';return;}
-  const parts=splitAmounts(amount,n);
+  const mode=document.getElementById('bankPartMode')?.value||'split_total';
+  const parts=mode==='repeat_each'?Array.from({length:n},()=>money(amount)):splitAmounts(amount,n);
+  const total=money(parts.reduce((s,x)=>s+Number(x||0),0));
   box.style.display='block';
-  box.textContent=n+' prélèvements sur le compte : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ');
+  box.textContent=n+' prélèvements : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ')+' · Total prévu '+euro2(total);
 }
 
 function syncUI(){
@@ -135,8 +138,10 @@ function ensureCommunSplit(){
   }
 }
 
-function makeBankParts(amount,count,old){
-  const amounts=splitAmounts(amount,count);
+function makeBankParts(amount,count,old,mode='split_total',unitAmount=0){
+  const amounts=mode==='repeat_each'
+    ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(unitAmount||0))
+    : splitAmounts(amount,count);
   return amounts.map((a,i)=>({
     id:old?.[i]?.id||('part-'+(i+1)),
     amount:a,
@@ -166,8 +171,15 @@ openTx=function(type,t=null){
   if(type!=='expense')return;
   const card=document.getElementById('cardOwner');
   const count=document.getElementById('bankPartCount');
+  const mode=document.getElementById('bankPartMode');
+  const amountEl=document.getElementById('amount');
   if(card)card.value=t?inferCardOwner(t):(document.getElementById('owner')?.value==='Lili'?'Lili':'Vincent');
   if(count)count.value=Array.isArray(t?.bankParts)&&t.bankParts.length?t.bankParts.length:1;
+  if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':'split_total';
+  if(t?.bankPartMode==='repeat_each'&&amountEl){
+    const unit=Number(t.bankPartUnitAmount||t.bankParts?.[0]?.amount||0);
+    if(unit>0)amountEl.value=String(unit);
+  }
   syncUI();
   if(!t)updateDebitMonth(false);
 };
@@ -192,9 +204,21 @@ if(saveBtn){
     const beforeIds=new Set((state.transactions||[]).map(t=>t.id));
     const count=Math.max(1,Math.min(12,Number(document.getElementById('bankPartCount')?.value||1)));
     const installment=!!document.getElementById('installBox')?.checked;
+    const partMode=document.getElementById('bankPartMode')?.value||'split_total';
+    const amountEl=document.getElementById('amount');
+    const enteredAmount=money(num(amountEl?.value));
+    const repeatedUnit=(method==='direct_debit'&&count>1&&!installment&&partMode==='repeat_each')?enteredAmount:0;
+    if(repeatedUnit>0&&amountEl){
+      amountEl.value=String(money(repeatedUnit*count));
+      ensureCommunSplit();
+    }
 
     setTimeout(()=>{
-      if(document.getElementById('txDialog')?.open)return;
+      if(document.getElementById('txDialog')?.open){
+        if(repeatedUnit>0&&amountEl)amountEl.value=String(repeatedUnit);
+        updatePreview();
+        return;
+      }
       let targets=[];
       if(editId){
         const t=(state.transactions||[]).find(x=>x.id===editId);
@@ -209,10 +233,21 @@ if(saveBtn){
         else delete t.cardOwner;
 
         if(method==='direct_debit'&&count>1&&!installment){
-          t.bankParts=makeBankParts(t.amount,count,t.bankParts);
+          if(partMode==='repeat_each'&&repeatedUnit>0){
+            t.bankPartMode='repeat_each';
+            t.bankPartUnitAmount=repeatedUnit;
+            t.amount=money(repeatedUnit*count);
+            t.bankParts=makeBankParts(t.amount,count,t.bankParts,'repeat_each',repeatedUnit);
+          }else{
+            t.bankPartMode='split_total';
+            delete t.bankPartUnitAmount;
+            t.bankParts=makeBankParts(t.amount,count,t.bankParts,'split_total',0);
+          }
           recalcDebited(t);
-        }else if(Array.isArray(t.bankParts)){
-          delete t.bankParts;
+        }else{
+          delete t.bankPartMode;
+          delete t.bankPartUnitAmount;
+          if(Array.isArray(t.bankParts))delete t.bankParts;
         }
       }
       persist();
