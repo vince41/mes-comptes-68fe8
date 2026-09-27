@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const V='0.5.21';
+const V='0.5.22';
 function setV(){
   document.title='Mes Comptes · V'+V;
   const h=document.querySelector('.top-brand h1 small');if(h)h.textContent='V'+V;
