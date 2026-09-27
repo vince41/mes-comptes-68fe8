@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const SERIES_SYNC_VERSION='0.5.17';
+const SERIES_SYNC_VERSION='0.5.20';
 const RULES_KEY='mes-comptes-category-rules-v3';
 const MIGRATION_KEY='mes-comptes-series-rules-v0517';
 
