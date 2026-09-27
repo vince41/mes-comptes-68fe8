@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.23';
+const PAYMENT_MODEL_VERSION='0.5.24';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -98,15 +98,16 @@ function updatePreview(){
   const countEl=document.getElementById('bankPartCount');
   const amountEl=document.getElementById('amount');
   const source=document.getElementById('debitSource')?.value||'account_direct';
-  if(!box||!countEl||!amountEl||source!=='account_direct'){if(box)box.style.display='none';return;}
+  if(!box||!countEl||!amountEl){if(box)box.style.display='none';return;}
   const n=Math.max(1,Math.min(12,Number(countEl.value||1)));
   const amount=num(amountEl.value);
   if(n<=1||amount<=0){box.style.display='none';return;}
   const mode=document.getElementById('bankPartMode')?.value||'split_total';
   const parts=mode==='repeat_each'?Array.from({length:n},()=>money(amount)):splitAmounts(amount,n);
   const total=money(parts.reduce((s,x)=>s+Number(x||0),0));
+  const kind=source==='account_direct'?'prélèvements sur le compte':'achats '+(source==='card_lili'?'Carte Lili':'Carte Vincent');
   box.style.display='block';
-  box.textContent=n+' prélèvements : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ')+' · Total prévu '+euro2(total);
+  box.textContent=n+' '+kind+' : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ')+' · Total '+euro2(total);
 }
 
 function syncUI(){
@@ -120,18 +121,18 @@ function syncUI(){
   if(cw)cw.style.display='none';
   if(bw){
     bw.style.display='grid';
-    bw.style.opacity=(source==='account_direct'&&!install)?'1':'.55';
+    bw.style.opacity=!install?'1':'.55';
   }
-  const enabled=source==='account_direct'&&!install;
+  const enabled=!install;
   if(count)count.disabled=!enabled;
   if(mode)mode.disabled=!enabled;
   const hint=bw?.querySelector('small');
   if(hint){
-    hint.textContent=enabled
-      ? 'Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.'
-      : install
-        ? 'Le suivi 4× utilise déjà ses propres échéances mensuelles.'
-        : 'Les paiements multiples séparés s’utilisent avec Compte direct / prélèvement.';
+    hint.textContent=install
+      ? 'Le suivi 4× utilise déjà ses propres échéances mensuelles.'
+      : source==='account_direct'
+        ? 'Compte direct : chaque passage pourra être validé séparément. Ex. 5 € répété 2 fois = 10 €.'
+        : 'Carte différée : crée plusieurs achats distincts sur la même carte pour gagner du temps.';
   }
   updatePreview();
 }
@@ -190,6 +191,24 @@ function ensureCommunSplit(){
   }
 }
 
+function cardBatchAmounts(amount,count,mode){
+  return mode==='repeat_each'
+    ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(amount))
+    : splitAmounts(amount,count);
+}
+function applyConcernSplit(t,itemAmount,originalAmount,originalV,originalL){
+  const a=money(itemAmount);
+  if(t.owner==='Vincent'){t.splitVincent=a;t.splitLili=0;return;}
+  if(t.owner==='Lili'){t.splitVincent=0;t.splitLili=a;return;}
+  const total=Number(originalAmount||0);
+  if(total>0&&(Number(originalV||0)>0||Number(originalL||0)>0)){
+    const v=money(a*(Number(originalV||0)/total));
+    t.splitVincent=v;t.splitLili=money(a-v);
+  }else{
+    const vc=Math.floor(cents(a)/2);
+    t.splitVincent=vc/100;t.splitLili=money(a-vc/100);
+  }
+}
 function makeBankParts(amount,count,old,mode='split_total',unitAmount=0){
   const amounts=mode==='repeat_each'
     ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(unitAmount||0))
@@ -230,6 +249,7 @@ openTx=function(type,t=null){
   if(card)card.value=t?inferCardOwner(t):'';
   if(count)count.value=Array.isArray(t?.bankParts)&&t.bankParts.length?t.bankParts.length:1;
   if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':'split_total';
+  if(t?.paymentMethod==='card_deferred'&&count)count.value='1';
   applySourceToLegacyFields();
   if(t?.bankPartMode==='repeat_each'&&amountEl){
     const unit=Number(t.bankPartUnitAmount||t.bankParts?.[0]?.amount||0);
@@ -283,6 +303,7 @@ if(saveBtn){
       }
       if(!targets.length)return;
 
+      const extra=[];
       for(const t of targets){
         if(method==='card_deferred')t.cardOwner=cardOwner;
         else delete t.cardOwner;
@@ -299,12 +320,30 @@ if(saveBtn){
             t.bankParts=makeBankParts(t.amount,count,t.bankParts,'split_total',0);
           }
           recalcDebited(t);
+        }else if(method==='card_deferred'&&count>1&&!installment){
+          const originalAmount=Number(t.amount||enteredAmount||0);
+          const originalV=Number(t.splitVincent||0),originalL=Number(t.splitLili||0);
+          const amounts=cardBatchAmounts(enteredAmount,count,partMode);
+          const group=uid();
+          amounts.forEach((a,i)=>{
+            const row=i===0?t:{...t,id:uid(),debitedAmount:0};
+            row.amount=money(a);
+            row.cardOwner=cardOwner;
+            row.cardBatchGroup=group;
+            row.cardBatchIndex=i+1;
+            row.cardBatchCount=count;
+            row.cardBatchMode=partMode;
+            applyConcernSplit(row,a,originalAmount,originalV,originalL);
+            delete row.bankParts;delete row.bankPartMode;delete row.bankPartUnitAmount;
+            if(i>0)extra.push(row);
+          });
         }else{
           delete t.bankPartMode;
           delete t.bankPartUnitAmount;
           if(Array.isArray(t.bankParts))delete t.bankParts;
         }
       }
+      if(extra.length)state.transactions.push(...extra);
       persist();
       if(typeof render==='function')render();
     },0);
