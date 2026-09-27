@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const GROUPING_VERSION='0.5.17';
+const GROUPING_VERSION='0.5.20';
 let groupingMode=localStorage.getItem('mes-comptes-list-mode')||'grouped';
 const expandedGroups=new Set();
 
@@ -38,7 +38,7 @@ function syncGroupingButtons(){
   document.getElementById('modeDetailed')?.classList.toggle('active',groupingMode==='detailed');
 }
 function merchantKey(t){return String(t?.label||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ')}
-function groupKey(t){return [merchantKey(t),String(t.category||autoCategory(t)),String(t.paymentMethod||'other')].join('|')}
+function groupKey(t){return [merchantKey(t),String(t.category||autoCategory(t)),String(t.paymentMethod||'other'),String(t.cardOwner||'')].join('|')}
 function shownAmount(t){return filterOwner==='Vincent'||filterOwner==='Lili'?profileAmount(t,filterOwner):Number(t.amount||0)}
 function shownDebited(t){return filterOwner==='Vincent'||filterOwner==='Lili'?profileDebited(t,filterOwner):expenseDebited(t)}
 function shownRemaining(t){return filterOwner==='Vincent'||filterOwner==='Lili'?profileRemaining(t,filterOwner):expenseRemaining(t)}
@@ -50,6 +50,7 @@ function expenseRow(t){
   if(t.projected) actions=`<button data-action="projectEdit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="projectFull" data-id="${t.id}">✓ Paiement passé</button>`;
   else if(full) actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button data-action="unpay" data-id="${t.id}">↩ Annuler passage</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
   else actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="full" data-id="${t.id}">✓ Paiement passé</button><button data-action="debit" data-id="${t.id}">Montant partiel</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
+  if(typeof window.MesComptesExpenseActions==='function'){const custom=window.MesComptesExpenseActions(t);if(custom)actions=custom;}
   row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(txMeta(t))}</div><div class="who-line">Concerne : ${esc(concernLabel(t))}</div>${splitDetailHtml(t)}<div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
   return row;
 }
@@ -68,7 +69,7 @@ function groupRow(g){
   let split='';
   if(filterOwner==='Tous'){const bits=[];if(v>0)bits.push(`Vincent ${euro.format(v)}`);if(l>0)bits.push(`Lili ${euro.format(l)}`);if(bits.length)split=`<div class="tx-group-split">${bits.join(' · ')}</div>`}
   const status=full?`Tout est passé sur le compte : ${euro.format(debited)}`:partial?`Déjà passé ${euro.format(debited)} · reste ${euro.format(remaining)}`:`Encore à prélever : ${euro.format(amount)}`;
-  wrap.innerHTML=`<div class="tx-group-head"><div class="tx-group-main"><div class="tx-group-title"><span class="category-badge">${esc(first.category||autoCategory(first))}</span>${esc(first.label)} <span class="group-count">${g.items.length} achats</span></div><div class="tx-group-sub">${esc(paymentLabel(first.paymentMethod)||'Autre')} · ${esc(dateTxt)}</div>${split}<div class="group-status">${esc(status)}</div><button class="tx-group-toggle" type="button" data-group-toggle="1">${open?'▲ Masquer le détail':`▼ Voir les ${g.items.length} achats`}</button></div><div class="tx-group-amount">${euro.format(amount)}</div></div><div class="tx-group-items"></div>`;
+  wrap.innerHTML=`<div class="tx-group-head"><div class="tx-group-main"><div class="tx-group-title"><span class="category-badge">${esc(first.category||autoCategory(first))}</span>${esc(first.label)} <span class="group-count">${g.items.length} achats</span></div><div class="tx-group-sub">${esc((paymentLabel(first.paymentMethod)||'Autre')+(first.cardOwner?' · carte '+first.cardOwner:''))} · ${esc(dateTxt)}</div>${split}<div class="group-status">${esc(status)}</div><button class="tx-group-toggle" type="button" data-group-toggle="1">${open?'▲ Masquer le détail':`▼ Voir les ${g.items.length} achats`}</button></div><div class="tx-group-amount">${euro.format(amount)}</div></div><div class="tx-group-items"></div>`;
   const inner=wrap.querySelector('.tx-group-items');
   for(const t of [...g.items].sort((a,b)=>(a.date||'').localeCompare(b.date||''))) inner.appendChild(expenseRow(t));
   wrap.querySelector('[data-group-toggle]').onclick=e=>{e.preventDefault();e.stopPropagation();if(expandedGroups.has(g.key))expandedGroups.delete(g.key);else expandedGroups.add(g.key);if(typeof render==='function')render()};
