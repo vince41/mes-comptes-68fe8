@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.22';
+const PAYMENT_MODEL_VERSION='0.5.23';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -36,7 +36,7 @@ function ensureUI(){
   wrap.className='fields2';
   wrap.innerHTML=
     '<label id="cardOwnerWrap"><span>Carte débit différé utilisée</span><select id="cardOwner"><option value="">Choisir la carte</option><option value="Vincent">Carte Vincent</option><option value="Lili">Carte Lili</option></select><small>Indépendant de la personne concernée par la dépense.</small></label>'+
-    '<label id="bankPartsWrap"><span>Nombre de prélèvements sur le compte</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><span style="margin-top:7px">Calcul des prélèvements</span><select id="bankPartMode"><option value="split_total">Répartir le montant total</option><option value="repeat_each">Répéter ce montant à chaque prélèvement</option></select><small>Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.</small></label>';
+    '<label id="bankPartsWrap"><span>Nombre de paiements / prélèvements</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><span style="margin-top:7px">Calcul des prélèvements</span><select id="bankPartMode"><option value="split_total">Répartir le montant total</option><option value="repeat_each">Répéter ce montant à chaque prélèvement</option></select><small>Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.</small></label>';
   firstRow.insertAdjacentElement('afterend',wrap);
 
   const prev=document.createElement('div');
@@ -111,13 +111,28 @@ function updatePreview(){
 
 function syncUI(){
   ensureUI();
-  const method=document.getElementById('paymentMethod')?.value;
   const install=!!document.getElementById('installBox')?.checked;
   const cw=document.getElementById('cardOwnerWrap');
   const bw=document.getElementById('bankPartsWrap');
-  if(cw)cw.style.display='none';
   const source=document.getElementById('debitSource')?.value||'account_direct';
-  if(bw)bw.style.display=source==='account_direct'&&!install?'grid':'none';
+  const count=document.getElementById('bankPartCount');
+  const mode=document.getElementById('bankPartMode');
+  if(cw)cw.style.display='none';
+  if(bw){
+    bw.style.display='grid';
+    bw.style.opacity=(source==='account_direct'&&!install)?'1':'.55';
+  }
+  const enabled=source==='account_direct'&&!install;
+  if(count)count.disabled=!enabled;
+  if(mode)mode.disabled=!enabled;
+  const hint=bw?.querySelector('small');
+  if(hint){
+    hint.textContent=enabled
+      ? 'Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.'
+      : install
+        ? 'Le suivi 4× utilise déjà ses propres échéances mensuelles.'
+        : 'Les paiements multiples séparés s’utilisent avec Compte direct / prélèvement.';
+  }
   updatePreview();
 }
 
@@ -213,9 +228,9 @@ openTx=function(type,t=null){
   const amountEl=document.getElementById('amount');
   if(source)source.value=t?sourceFromTx(t):'account_direct';
   if(card)card.value=t?inferCardOwner(t):'';
-  applySourceToLegacyFields();
   if(count)count.value=Array.isArray(t?.bankParts)&&t.bankParts.length?t.bankParts.length:1;
   if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':'split_total';
+  applySourceToLegacyFields();
   if(t?.bankPartMode==='repeat_each'&&amountEl){
     const unit=Number(t.bankPartUnitAmount||t.bankParts?.[0]?.amount||0);
     if(unit>0)amountEl.value=String(unit);
@@ -347,6 +362,14 @@ document.body.addEventListener('click',e=>{
   const b=e.target.closest('[data-action]');
   if(!b)return;
   const a=b.dataset.action;
+
+  if(a==='edit'){
+    const t=(state.transactions||[]).find(x=>x.id===b.dataset.id);
+    if(!t)return;
+    e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
+    openTx(t.type,t);
+    return;
+  }
 
   if(a==='bankPartPass'||a==='bankPartUndo'){
     e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
