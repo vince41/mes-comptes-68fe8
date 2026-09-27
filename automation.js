@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const AUTO_VERSION='0.5.12.1';
+const AUTO_VERSION='0.5.20';
 
 function localToday(){
   const d=new Date(), y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
