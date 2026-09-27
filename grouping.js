@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const GROUPING_VERSION='0.5.12.1';
+const GROUPING_VERSION='0.5.17';
 let groupingMode=localStorage.getItem('mes-comptes-list-mode')||'grouped';
 const expandedGroups=new Set();
 
@@ -47,7 +47,7 @@ function expenseRow(t){
   row.className='tx'+(full?' confirmed':partial?' partial':''); row.classList.toggle('projection-card',!!t.projected);
   const badge=t.source==='LibreOffice'?'<span class="source-badge">LibreOffice</span>':t.projected?'<span class="projected-badge">Prévision auto</span>':'';
   let actions='';
-  if(t.projected) actions=`<button class="paid-btn" data-action="full" data-id="${t.id}">✓ Paiement passé</button>`;
+  if(t.projected) actions=`<button data-action="projectEdit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="projectFull" data-id="${t.id}">✓ Paiement passé</button>`;
   else if(full) actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button data-action="unpay" data-id="${t.id}">↩ Annuler passage</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
   else actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="full" data-id="${t.id}">✓ Paiement passé</button><button data-action="debit" data-id="${t.id}">Montant partiel</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
   row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(txMeta(t))}</div><div class="who-line">Concerne : ${esc(concernLabel(t))}</div>${splitDetailHtml(t)}<div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
@@ -76,8 +76,13 @@ function groupRow(g){
 }
 const originalRenderExpenses=renderExpenses;
 renderExpenses=function(id,arr){
-  if(groupingMode==='detailed') return originalRenderExpenses(id,arr);
   const el=document.getElementById(id);if(!el)return;
+  if(groupingMode==='detailed'){
+    if(!arr.length){el.innerHTML='<div class="empty">Aucune opération</div>';return}
+    el.innerHTML='';
+    for(const t of [...arr].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.label||'').localeCompare(b.label||''))) el.appendChild(expenseRow(t));
+    return;
+  }
   if(!arr.length){el.innerHTML='<div class="empty">Aucune opération</div>';return}
   el.innerHTML='';
   for(const g of makeGroups(arr)) el.appendChild(groupRow(g));
@@ -90,3 +95,20 @@ function patchVersion(){
 addGroupingStyles();addGroupingControls();patchVersion();
 if(typeof render==='function') render();
 })();
+
+function materializeProjectedForAction(id){
+  const p=(typeof effectiveTransactions==='function'?effectiveTransactions(state.currentMonth):[]).find(x=>x.id===id);
+  if(!p||!p.projected)return state.transactions.find(x=>x.id===id)||null;
+  const real={...p,projected:false,source:'Prévision enregistrée'};
+  state.transactions.push(real);
+  try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
+  return real;
+}
+document.body.addEventListener('click',e=>{
+  const b=e.target.closest('[data-action="projectEdit"],[data-action="projectFull"]');
+  if(!b)return;
+  e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
+  const t=materializeProjectedForAction(b.dataset.id);if(!t)return;
+  if(b.dataset.action==='projectEdit'){openTx(t.type,t);return;}
+  t.debitedAmount=Number(t.amount||0);save();
+},true);
