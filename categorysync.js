@@ -1,12 +1,26 @@
 (function(){
 'use strict';
-const CATEGORY_SYNC_VERSION='0.5.12.1';
-const RULES_KEY='mes-comptes-category-rules-v2';
-const MIGRATION_KEY='mes-comptes-category-migration-v0512';
+const CATEGORY_SYNC_VERSION='0.5.15';
+const RULES_KEY='mes-comptes-category-rules-v3';
+const MIGRATION_KEY='mes-comptes-category-migration-v0515';
 
 function clean(v){return String(v||'').trim().replace(/\s+/g,' ');}
 function norm(v){return clean(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
 function cents(v){return Math.round(Number(v||0)*100);}
+function addMonths(m,n){
+  if(!/^\d{4}-\d{2}$/.test(String(m||'')))return '';
+  const [y,mo]=String(m).split('-').map(Number);
+  const d=new Date(y,mo-1+n,1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function installmentKey(t){
+  const count=Number(t?.installmentCount||0);
+  const index=Number(t?.installmentIndex||0);
+  const month=String(t?.month||'');
+  if(count<2||index<1||index>count||!/^\d{4}-\d{2}$/.test(month))return '';
+  const start=addMonths(month,-(index-1));
+  return 'instsig:'+norm(t.label)+'|'+cents(t.amount)+'|'+count+'|'+start;
+}
 function loadRules(){
   try{const x=JSON.parse(localStorage.getItem(RULES_KEY)||'[]');return Array.isArray(x)?x:[];}
   catch(e){return [];}
@@ -14,6 +28,8 @@ function loadRules(){
 function saveRules(rules){localStorage.setItem(RULES_KEY,JSON.stringify(rules));}
 function identityKeys(t){
   const keys=[];
+  const ik=installmentKey(t);
+  if(ik)keys.push(ik);
   if(t?.installmentGroup)keys.push('install:'+t.installmentGroup);
   if(t?.seriesId)keys.push('series:'+t.seriesId);
   keys.push('match:'+[
@@ -30,21 +46,25 @@ function ruleFor(t){
   const rules=loadRules();
   for(const key of keys){
     const matches=rules
-      .filter(x=>x.key===key && (!x.fromMonth||month>=x.fromMonth) && x.category)
+      .filter(x=>x.key===key&&(!x.fromMonth||month>=x.fromMonth)&&x.category)
       .sort((a,b)=>String(b.fromMonth||'').localeCompare(String(a.fromMonth||'')));
     if(matches.length)return matches[0];
   }
   return null;
 }
 function rememberRule(t,category,fromMonth){
-  category=clean(category); if(!t||!category)return;
-  const rules=loadRules(), start=String(fromMonth||t.month||'');
+  category=clean(category);if(!t||!category)return;
+  const rules=loadRules(),start=String(fromMonth||t.month||'');
   for(const key of identityKeys(t)){
     const next={key,category,fromMonth:start,updatedAt:new Date().toISOString()};
-    const i=rules.findIndex(x=>x.key===key && String(x.fromMonth||'')===start);
-    if(i>=0)rules[i]=next; else rules.push(next);
+    const i=rules.findIndex(x=>x.key===key&&String(x.fromMonth||'')===start);
+    if(i>=0)rules[i]=next;else rules.push(next);
   }
   saveRules(rules);
+}
+function sameInstallmentSeries(base,t){
+  const a=installmentKey(base),b=installmentKey(t);
+  return !!a&&a===b;
 }
 function applyRules(){
   let changed=0;
@@ -59,16 +79,7 @@ function applyRules(){
   }
   return changed;
 }
-function persistState(){
-  try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
-}
-function setVersion(){
-  document.title='Mes Comptes · V'+CATEGORY_SYNC_VERSION;
-  const v=document.querySelector('.top-brand h1 small');if(v)v.textContent='V'+CATEGORY_SYNC_VERSION;
-  let badge=document.getElementById('mcVersionBadge');
-  if(!badge){badge=document.createElement('div');badge.id='mcVersionBadge';badge.style.cssText='position:fixed;top:calc(env(safe-area-inset-top) + 8px);right:10px;z-index:99999;background:#0b3153;color:#f4c767;border:1px solid #2d6b97;border-radius:999px;padding:5px 9px;font:700 12px system-ui;box-shadow:0 4px 14px #0008';document.body.appendChild(badge);}
-  badge.textContent='V'+CATEGORY_SYNC_VERSION;
-}
+function persistState(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
 function toast(msg){
   try{
     const n=document.createElement('div');n.textContent=msg;
@@ -79,19 +90,20 @@ function toast(msg){
 
 const previousAutoCategory=autoCategory;
 
-function migrateLegacyManualCategories(){
+function migrateExistingInstallmentCategories(){
   if(localStorage.getItem(MIGRATION_KEY)==='done')return 0;
-  const rows=(state.transactions||[])
-    .filter(t=>t?.type==='expense'&&(t.installmentGroup||t.seriesId||t.recurring))
-    .sort((a,b)=>String(a.month||'').localeCompare(String(b.month||''))||String(a.date||'').localeCompare(String(b.date||'')));
   let found=0;
+  const rows=(state.transactions||[])
+    .filter(t=>t?.type==='expense'&&Number(t.installmentCount||0)>1&&Number(t.installmentIndex||0)>0)
+    .sort((a,b)=>String(a.month||'').localeCompare(String(b.month||''))||Number(a.installmentIndex||0)-Number(b.installmentIndex||0));
+
   for(const t of rows){
     const current=clean(t.category);
     if(!current)continue;
     const automatic=clean(previousAutoCategory(t));
     if(current.toLocaleLowerCase('fr-FR')!==automatic.toLocaleLowerCase('fr-FR')){
-      rememberRule(t,current,t.month||'');
       t.manualCategory=true;
+      rememberRule(t,current,t.month||'');
       found++;
     }
   }
@@ -126,7 +138,7 @@ if(btn){
     previous.call(this,e);
 
     const dlg=document.getElementById('txDialog');
-    if(dlg?.open || type!=='expense' || !selected)return;
+    if(dlg?.open||type!=='expense'||!selected)return;
 
     let base=null;
     if(editId)base=state.transactions.find(t=>t.id===editId);
@@ -138,27 +150,35 @@ if(btn){
 
     base.manualCategory=true;
     rememberRule(base,selected,base.month||state.currentMonth);
+
+    // Applique immédiatement la catégorie aux échéances suivantes déjà existantes du même achat.
+    if(Number(base.installmentCount||0)>1){
+      for(const t of state.transactions||[]){
+        if(t.id===base.id||t.type!=='expense')continue;
+        if(sameInstallmentSeries(base,t)&&String(t.month||'')>=String(base.month||'')){
+          t.category=selected;
+          t.manualCategory=true;
+        }
+      }
+    }
+
     const changed=applyRules();
     persistState();
     if(typeof render==='function')render();
 
-    if(base.installmentGroup){
-      toast('Catégorie "'+selected+'" appliquée à ce paiement en plusieurs fois et aux échéances suivantes.');
+    if(Number(base.installmentCount||0)>1){
+      toast('Catégorie "'+selected+'" conservée jusqu’à la dernière échéance de ce paiement.');
     }else if(base.seriesId||base.recurring){
-      toast('Catégorie "'+selected+'" appliquée à cette dépense mensuelle et aux mois suivants.');
+      toast('Catégorie "'+selected+'" appliquée aux mois suivants.');
     }else if(changed){
-      toast('Catégorie "'+selected+'" conservée pour les opérations correspondantes des mois suivants.');
+      toast('Catégorie "'+selected+'" conservée pour les opérations correspondantes.');
     }
   };
 }
 
-const migrated=migrateLegacyManualCategories();
-const initialChanged=applyRules();
-if(migrated||initialChanged)persistState();
-setVersion();
-setTimeout(()=>{
-  setVersion();
-  if(typeof render==='function')render();
-  if(migrated)toast(migrated+' ancien'+(migrated>1?'s choix de catégorie récupérés':' choix de catégorie récupéré')+'.');
-},300);
+const migrated=migrateExistingInstallmentCategories();
+const changed=applyRules();
+if(migrated||changed)persistState();
+if(typeof render==='function'&&changed)render();
+setTimeout(()=>{if(migrated)toast(migrated+' catégorie'+(migrated>1?'s':'')+' de paiement en plusieurs fois récupérée'+(migrated>1?'s':'')+'.');},450);
 })();
