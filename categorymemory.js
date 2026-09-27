@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const CATEGORY_MEMORY_VERSION='0.5.12.1';
+const CATEGORY_MEMORY_VERSION='0.5.20';
 const STORAGE_KEY='mes-comptes-custom-categories';
 
 function clean(v){return String(v||'').trim().replace(/\s+/g,' ');}
