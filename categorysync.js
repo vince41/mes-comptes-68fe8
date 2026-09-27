@@ -1,170 +1,155 @@
 (function(){
 'use strict';
-const CATEGORY_SYNC_VERSION='0.5.16';
+const SERIES_SYNC_VERSION='0.5.17';
 const RULES_KEY='mes-comptes-category-rules-v3';
+const MIGRATION_KEY='mes-comptes-series-rules-v0517';
 
 function clean(v){return String(v||'').trim().replace(/\s+/g,' ');}
 function norm(v){return clean(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
 function cents(v){return Math.round(Number(v||0)*100);}
-function addMonths(m,n){
+function addM(m,n){
   if(!/^\d{4}-\d{2}$/.test(String(m||'')))return '';
-  const [y,mo]=String(m).split('-').map(Number);
-  const d=new Date(y,mo-1+n,1);
+  const [y,mo]=String(m).split('-').map(Number),d=new Date(y,mo-1+n,1);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 }
-function installmentSeriesKey(t){
-  const count=Number(t?.installmentCount||0);
-  const index=Number(t?.installmentIndex||0);
-  const month=String(t?.month||'');
-  if(count<2||index<1||index>count||!/^\d{4}-\d{2}$/.test(month))return '';
-  const start=addMonths(month,-(index-1));
-  return 'inst:'+cents(t.amount)+'|'+count+'|'+start;
+function stableInstallmentKey(t){
+  const total=Number(t?.installmentCount||0),idx=Number(t?.installmentIndex||0),m=String(t?.month||'');
+  if(total<2||idx<1||idx>total||!/^\d{4}-\d{2}$/.test(m))return '';
+  return 'inst:'+cents(t.amount)+'|'+total+'|'+addM(m,-(idx-1));
 }
-function recurringFallbackKey(t){
-  if(!t?.recurring)return '';
-  return 'rec:'+norm(t.label)+'|'+cents(t.amount);
+function legacyInstallmentKey(t){
+  const total=Number(t?.installmentCount||0),idx=Number(t?.installmentIndex||0),m=String(t?.month||'');
+  if(total<2||idx<1||idx>total||!/^\d{4}-\d{2}$/.test(m))return '';
+  return 'instsig:'+norm(t.label)+'|'+cents(t.amount)+'|'+total+'|'+addM(m,-(idx-1));
 }
-function loadRules(){
-  try{const x=JSON.parse(localStorage.getItem(RULES_KEY)||'[]');return Array.isArray(x)?x:[];}
-  catch(e){return [];}
+function keys(t){
+  const a=[];
+  const sk=stableInstallmentKey(t),lk=legacyInstallmentKey(t);
+  if(sk)a.push(sk); if(lk)a.push(lk);
+  if(t?.installmentGroup)a.push('installGroup:'+t.installmentGroup,'install:'+t.installmentGroup);
+  if(t?.seriesId)a.push('series:'+t.seriesId);
+  return [...new Set(a)];
 }
-function saveRules(rules){localStorage.setItem(RULES_KEY,JSON.stringify(rules));}
-function identityKeys(t){
-  const keys=[];
-  const ik=installmentSeriesKey(t); if(ik)keys.push(ik);
-  if(t?.installmentGroup)keys.push('installGroup:'+t.installmentGroup);
-  if(t?.seriesId)keys.push('series:'+t.seriesId);
-  const rk=recurringFallbackKey(t); if(rk)keys.push(rk);
-  return keys;
-}
-function ruleFor(t){
-  const keys=identityKeys(t);
-  if(!keys.length)return null;
-  const rules=loadRules();
-  for(const key of keys){
-    const r=rules.find(x=>x.key===key&&x.category);
-    if(r)return r;
+function loadRules(){try{const x=JSON.parse(localStorage.getItem(RULES_KEY)||'[]');return Array.isArray(x)?x:[]}catch(e){return []}}
+function saveRules(x){localStorage.setItem(RULES_KEY,JSON.stringify(x))}
+function findRule(t){
+  const ks=keys(t),rs=loadRules();
+  for(const k of ks){
+    const hit=rs.filter(r=>r.key===k).sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')))[0];
+    if(hit)return hit;
   }
   return null;
 }
-function sameSeries(snapshot,t){
-  if(!snapshot||!t||t.type!=='expense')return false;
-  const group=snapshot.installmentGroup||'';
-  if(group&&t.installmentGroup===group)return true;
-  const series=snapshot.seriesId||'';
-  if(series&&t.seriesId===series)return true;
-  const ik=installmentSeriesKey(snapshot);
-  if(ik&&installmentSeriesKey(t)===ik)return true;
-  const rk=recurringFallbackKey(snapshot);
-  if(rk&&recurringFallbackKey(t)===rk)return true;
-  return false;
-}
-function membersFor(before,after){
-  const seed=before||after;
-  if(!seed)return [];
-  let rows=(state.transactions||[]).filter(t=>sameSeries(seed,t));
-  if(after&&!rows.some(t=>t.id===after.id))rows.push(after);
-  return rows;
-}
-function replaceSeriesRule(before,after,members,category){
-  category=clean(category);
-  if(!category)return;
-  const keySet=new Set();
-  for(const t of [before,after,...members]){
-    if(!t)continue;
-    for(const k of identityKeys(t))keySet.add(k);
+function upsertSeriesRule(t,patch){
+  const ks=keys(t); if(!ks.length)return;
+  let rs=loadRules(),now=new Date().toISOString();
+  for(const k of ks){
+    const i=rs.findIndex(r=>r.key===k);
+    const old=i>=0?rs[i]:{key:k};
+    const next={...old,...patch,key:k,updatedAt:now};
+    if(i>=0)rs[i]=next;else rs.push(next);
   }
-  let rules=loadRules().filter(r=>!keySet.has(r.key));
-  const now=new Date().toISOString();
-  for(const k of keySet)rules.push({key:k,category,updatedAt:now});
-  saveRules(rules);
+  saveRules(rs);
 }
-function applyStoredRules(){
-  let changed=0;
+function sameSeries(a,b){
+  if(!a||!b||b.type!=='expense')return false;
+  if(a.installmentGroup&&b.installmentGroup===a.installmentGroup)return true;
+  if(a.seriesId&&b.seriesId===a.seriesId)return true;
+  const ak=stableInstallmentKey(a),bk=stableInstallmentKey(b);
+  return !!ak&&ak===bk;
+}
+function migrateOldRules(){
+  if(localStorage.getItem(MIGRATION_KEY)==='done')return 0;
+  let made=0;
   for(const t of state.transactions||[]){
-    if(t?.type!=='expense')continue;
-    const r=ruleFor(t);
-    if(r&&clean(t.category)!==clean(r.category)){
-      t.category=r.category;
-      t.manualCategory=true;
-      changed++;
+    if(t?.type!=='expense'||Number(t.installmentCount||0)<2)continue;
+    const rs=loadRules(),lk=legacyInstallmentKey(t),sk=stableInstallmentKey(t);
+    const old=rs.find(r=>r.key===lk);
+    if(old&&sk&&!rs.some(r=>r.key===sk)){
+      rs.push({...old,key:sk,updatedAt:new Date().toISOString()});saveRules(rs);made++;
+    }
+    const auto=clean(previousAutoCategory(t)),current=clean(t.category);
+    if(current&&current.toLocaleLowerCase('fr-FR')!==auto.toLocaleLowerCase('fr-FR')){
+      upsertSeriesRule(t,{category:current});made++;
     }
   }
-  return changed;
+  localStorage.setItem(MIGRATION_KEY,'done');
+  return made;
 }
-function persist(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
-function toast(msg){
-  try{
-    const n=document.createElement('div');n.textContent=msg;
-    n.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:100000;background:#082f50;color:#eaf8ff;border:1px solid #2d6b97;border-radius:12px;padding:9px 12px;font:700 13px system-ui;box-shadow:0 6px 18px #0008;max-width:92vw;text-align:center';
-    document.body.appendChild(n);setTimeout(()=>n.remove(),2800);
-  }catch(e){}
+function applyRulesToStored(){
+  let n=0;
+  for(const t of state.transactions||[]){
+    if(t?.type!=='expense')continue;
+    const r=findRule(t);if(!r)continue;
+    if(r.category&&clean(t.category)!==clean(r.category)){t.category=r.category;t.manualCategory=true;n++}
+    if(r.label&&clean(t.label)!==clean(r.label)){t.label=r.label;n++}
+  }
+  return n;
+}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}}
+function toast(s){
+  const n=document.createElement('div');n.textContent=s;
+  n.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:100000;background:#082f50;color:#eaf8ff;border:1px solid #2d6b97;border-radius:12px;padding:9px 12px;font:700 13px system-ui;box-shadow:0 6px 18px #0008;max-width:92vw;text-align:center';
+  document.body.appendChild(n);setTimeout(()=>n.remove(),2800);
 }
 
 const previousAutoCategory=autoCategory;
 autoCategory=function(t){
-  const r=ruleFor(t);
+  const r=findRule(t);
   return r?.category||previousAutoCategory(t);
 };
 
-const previousProjected=typeof projectedTransactions==='function'?projectedTransactions:null;
-if(previousProjected){
+const oldProjected=typeof projectedTransactions==='function'?projectedTransactions:null;
+if(oldProjected){
   projectedTransactions=function(m){
-    const rows=previousProjected(m);
-    return rows.map(t=>{
-      const r=ruleFor(t);
-      return r?{...t,category:r.category,manualCategory:true}:t;
+    return oldProjected(m).map(t=>{
+      const r=findRule(t);if(!r)return t;
+      return {...t,category:r.category||t.category,label:r.label||t.label,manualCategory:!!r.category};
     });
   };
 }
 
-const btn=document.getElementById('saveTx');
-if(btn){
-  const previous=btn.onclick;
-  btn.onclick=function(e){
-    const editId=document.getElementById('editId')?.value||'';
-    const beforeTx=editId?state.transactions.find(t=>t.id===editId):null;
-    const before=beforeTx?JSON.parse(JSON.stringify(beforeTx)):null;
-    const selectedCategory=clean(document.getElementById('category')?.value);
-    const typedLabel=clean(document.getElementById('label')?.value);
+const saveBtn=document.getElementById('saveTx');
+if(saveBtn){
+  const prev=saveBtn.onclick;
+  saveBtn.onclick=function(e){
+    const id=document.getElementById('editId')?.value||'';
     const type=document.getElementById('txType')?.value;
+    const beforeTx=id?state.transactions.find(x=>x.id===id):null;
+    const before=beforeTx?JSON.parse(JSON.stringify(beforeTx)):null;
+    const newCategory=clean(document.getElementById('category')?.value);
+    const newLabel=clean(document.getElementById('label')?.value);
 
-    previous.call(this,e);
+    prev.call(this,e);
 
-    const dlg=document.getElementById('txDialog');
-    if(dlg?.open||type!=='expense'||!editId||!before)return;
+    if(document.getElementById('txDialog')?.open||type!=='expense'||!before)return;
+    const after=state.transactions.find(x=>x.id===id);if(!after)return;
+    const series=(state.transactions||[]).filter(t=>sameSeries(before,t)||sameSeries(after,t));
+    if(series.length<2)return;
 
-    const after=state.transactions.find(t=>t.id===editId);
-    if(!after)return;
-
-    const members=membersFor(before,after);
-    if(members.length<2)return;
-
-    const categoryChanged=selectedCategory&&clean(before.category)!==selectedCategory;
-    const labelChanged=typedLabel&&clean(before.label)!==typedLabel;
-
+    const categoryChanged=!!newCategory&&clean(before.category)!==newCategory;
+    const labelChanged=!!newLabel&&clean(before.label)!==newLabel;
     if(!categoryChanged&&!labelChanged)return;
 
-    for(const t of members){
-      if(labelChanged)t.label=typedLabel;
-      if(categoryChanged){
-        t.category=selectedCategory;
-        t.manualCategory=true;
-      }
+    for(const t of series){
+      if(categoryChanged){t.category=newCategory;t.manualCategory=true}
+      if(labelChanged)t.label=newLabel;
     }
-
-    if(categoryChanged)replaceSeriesRule(before,after,members,selectedCategory);
-
+    upsertSeriesRule(before,{
+      ...(categoryChanged?{category:newCategory}:{}),
+      ...(labelChanged?{label:newLabel}:{})
+    });
+    upsertSeriesRule(after,{
+      ...(categoryChanged?{category:newCategory}:{}),
+      ...(labelChanged?{label:newLabel}:{})
+    });
     persist();
     if(typeof render==='function')render();
-
-    const parts=[];
-    if(labelChanged)parts.push('nom');
-    if(categoryChanged)parts.push('catégorie');
-    toast('Le '+parts.join(' et la ')+' a été synchronisé sur toute la série ('+members.length+' échéances).');
+    toast((categoryChanged&&labelChanged?'Nom et catégorie synchronisés':categoryChanged?'Catégorie synchronisée':'Nom synchronisé')+' sur toute la série.');
   };
 }
 
-const changed=applyStoredRules();
-if(changed){persist();if(typeof render==='function')render();}
+const migrated=migrateOldRules();
+const changed=applyRulesToStored();
+if(migrated||changed){persist();if(typeof render==='function')render()}
 })();
