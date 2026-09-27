@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PROJECTION_EDIT_VERSION='0.5.17';
+const PROJECTION_EDIT_VERSION='0.5.20';
 
 function materializeProjection(id){
   let p=null;
