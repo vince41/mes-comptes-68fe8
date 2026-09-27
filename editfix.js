@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const EDIT_FIX_VERSION='0.5.12.1';
+const EDIT_FIX_VERSION='0.5.20';
 let editSnapshot=null;
 const oldOpenTx=openTx;
 const oldSaveTx=$('saveTx').onclick;
