@@ -47,11 +47,17 @@ function expenseRow(t){
   row.className='tx'+(full?' confirmed':partial?' partial':''); row.classList.toggle('projection-card',!!t.projected);
   const badge=t.source==='LibreOffice'?'<span class="source-badge">LibreOffice</span>':t.projected?'<span class="projected-badge">Prévision auto</span>':'';
   let actions='';
-  if(t.projected) actions=`<button data-action="projectEdit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="projectFull" data-id="${t.id}">✓ Paiement passé</button>`;
-  else if(full) actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button data-action="unpay" data-id="${t.id}">↩ Annuler passage</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
-  else actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="full" data-id="${t.id}">✓ Paiement passé</button><button data-action="debit" data-id="${t.id}">Montant partiel</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
+  const multi=Number(t.debitPartCount||1)>1;
+  const parts=multi&&window.MesComptesDebitParts?window.MesComptesDebitParts.buildParts(t.amount,t.debitPartCount):[];
+  const passed=multi&&window.MesComptesDebitParts?window.MesComptesDebitParts.passedCount(t):0;
+  const nextAmt=multi&&passed<parts.length?parts[passed]:0;
+  if(t.projected) actions=`<button data-action="projectEdit" data-id="${t.id}">Modifier</button>${multi?`<button class="paid-btn" data-action="nextSubDebit" data-id="${t.id}">✓ Passer ${passed+1}/${parts.length} · ${euro.format(nextAmt)}</button>`:`<button class="paid-btn" data-action="projectFull" data-id="${t.id}">✓ Paiement passé</button>`}`;
+  else if(full) actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button data-action="${multi?'undoSubDebit':'unpay'}" data-id="${t.id}">↩ ${multi?'Annuler dernier passage':'Annuler passage'}</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
+  else actions=`<button data-action="edit" data-id="${t.id}">Modifier</button><button class="paid-btn" data-action="${multi?'nextSubDebit':'full'}" data-id="${t.id}">${multi?`✓ Passer ${passed+1}/${parts.length} · ${euro.format(nextAmt)}`:'✓ Paiement passé'}</button><button data-action="debit" data-id="${t.id}">Montant partiel</button><button data-action="delete" data-id="${t.id}">🗑</button>`;
   if(typeof window.MesComptesExpenseActions==='function'){const custom=window.MesComptesExpenseActions(t);if(custom)actions=custom;}
-  row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(txMeta(t))}</div><div class="who-line">Concerne : ${esc(concernLabel(t))}</div>${splitDetailHtml(t)}<div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
+  const sourceTxt=t.paymentMethod==='card_deferred'?('Carte différée '+(t.cardOwner||t.owner||'')):(t.paymentMethod==='direct_debit'?'Prélèvement compte':paymentLabel(t.paymentMethod));
+  const multiTxt=multi?` · ${passed}/${parts.length} passages validés`:'';
+  row.innerHTML=`<div><div class="tx-title"><span class="category-badge">${esc(t.category||autoCategory(t))}</span>${esc(t.label)} ${badge}</div><div class="tx-meta">${esc(sourceTxt)}${multiTxt} · ${esc(txMeta(t))}</div><div class="who-line">Source : ${esc(sourceTxt)}</div><div class="status-line">${esc(statusLabel(t,who))}</div></div><div><div class="tx-amount">${euro.format(a)}</div><div class="tx-actions">${actions}</div></div>`;
   return row;
 }
 function makeGroups(arr){
