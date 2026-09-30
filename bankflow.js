@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BANKFLOW_VERSION='0.5.25';
+const BANKFLOW_VERSION='0.5.26';
 const oldDefaultState=defaultState;
 const oldNormalizeState=normalizeState;
 const oldSummary=summary;
@@ -51,7 +51,7 @@ summary=function(m,stack=new Set()){
     const p=prevMonth(m);
     if(effectiveTransactions(p).length||state.months[p]){
       const ps=summary(p,nextStack);
-      start=ps.currentBalance;
+      start=ps.forecast;
       forecastStart=ps.forecast;
     }
   }
