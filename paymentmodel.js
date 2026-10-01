@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const PAYMENT_MODEL_VERSION='0.5.25';
+const PAYMENT_MODEL_VERSION='0.5.27';
 
 function clean(v){return String(v??'').trim();}
 function num(v){const n=Number(String(v??'').replace(',','.'));return Number.isFinite(n)?n:0;}
@@ -36,13 +36,18 @@ function ensureUI(){
   wrap.className='fields2';
   wrap.innerHTML=
     '<label id="cardOwnerWrap"><span>Carte débit différé utilisée</span><select id="cardOwner"><option value="">Choisir la carte</option><option value="Vincent">Carte Vincent</option><option value="Lili">Carte Lili</option></select><small>Indépendant de la personne concernée par la dépense.</small></label>'+
-    '<label id="bankPartsWrap"><span>Nombre de paiements / prélèvements</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><span style="margin-top:7px">Calcul des prélèvements</span><select id="bankPartMode"><option value="split_total">Répartir le montant total</option><option value="repeat_each">Répéter ce montant à chaque prélèvement</option></select><small>Ex. WoW : 25,98 € répartis en 2 = 12,99 € + 12,99 €. Netlify : 5 € répété 2 fois = 10 € au total.</small></label>';
+    '<label id="bankPartsWrap"><span>Nombre de paiements / prélèvements</span><input id="bankPartCount" type="number" min="1" max="12" value="1"><span style="margin-top:7px">Calcul des prélèvements</span><select id="bankPartMode"><option value="split_total">Répartir le montant total</option><option value="repeat_each">Répéter ce montant à chaque prélèvement</option><option value="custom">Montants personnalisés</option></select><small>Répartis automatiquement, répète le même montant, ou saisis chaque prélèvement au centime près.</small></label>';
   firstRow.insertAdjacentElement('afterend',wrap);
+
+  const custom=document.createElement('div');
+  custom.id='bankCustomParts';
+  custom.style.cssText='display:none;margin:-2px 0 10px;padding:10px 11px;border:1px solid #245b7f;border-radius:10px;background:#06233b;gap:8px';
+  wrap.insertAdjacentElement('afterend',custom);
 
   const prev=document.createElement('div');
   prev.id='bankPartsPreview';
   prev.style.cssText='display:none;margin:-2px 0 10px;padding:9px 11px;border:1px solid #245b7f;border-radius:10px;background:#06233b;color:#b9d9ec;font-size:.78rem';
-  wrap.insertAdjacentElement('afterend',prev);
+  custom.insertAdjacentElement('afterend',prev);
 
   const owner=document.getElementById('owner');
   if(owner&&!owner.querySelector('option[value="Compte"]')){
@@ -66,8 +71,8 @@ function ensureUI(){
     updateDebitMonth(true);
   });
   document.getElementById('cardOwner')?.addEventListener('change',()=>updateDebitMonth(true));
-  document.getElementById('bankPartCount')?.addEventListener('input',updatePreview);
-  document.getElementById('bankPartMode')?.addEventListener('change',updatePreview);
+  document.getElementById('bankPartCount')?.addEventListener('input',()=>{syncCustomPartInputs(true);updatePreview();});
+  document.getElementById('bankPartMode')?.addEventListener('change',()=>{syncCustomPartInputs(true);updatePreview();});
   document.getElementById('amount')?.addEventListener('input',updatePreview);
   document.getElementById('date')?.addEventListener('change',()=>updateDebitMonth(false));
   document.getElementById('installBox')?.addEventListener('change',syncUI);
@@ -96,6 +101,37 @@ function splitAmounts(total,count){
   return arr;
 }
 
+function customPartInputs(){
+  return [...document.querySelectorAll('#bankCustomParts input[data-bank-custom-part]')];
+}
+function customAmounts(count){
+  const els=customPartInputs();
+  if(els.length!==count)return[];
+  return els.map(el=>money(num(el.value)));
+}
+function syncCustomPartInputs(reset=false,values=null){
+  const box=document.getElementById('bankCustomParts');
+  const countEl=document.getElementById('bankPartCount');
+  const mode=document.getElementById('bankPartMode')?.value||'split_total';
+  const amount=num(document.getElementById('amount')?.value);
+  const install=!!document.getElementById('installBox')?.checked;
+  if(!box||!countEl)return;
+  const n=Math.max(1,Math.min(12,Number(countEl.value||1)));
+  if(mode!=='custom'||n<=1||install){box.style.display='none';return;}
+  let parts=[];
+  if(Array.isArray(values)&&values.length===n){
+    parts=values.map(x=>money(x));
+  }else{
+    const existing=customAmounts(n);
+    parts=!reset&&existing.length===n?existing:splitAmounts(amount,n);
+  }
+  box.style.display='grid';
+  box.innerHTML='<div style="font-weight:850;color:#d9efff">Montant de chaque prélèvement</div>'+
+    parts.map((x,i)=>'<label style="display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:center"><span>'+(i+1)+'/'+n+'</span><input data-bank-custom-part="'+i+'" type="text" inputmode="decimal" value="'+money(x).toFixed(2).replace('.',',')+'" aria-label="Montant prélèvement '+(i+1)+'"></label>').join('')+
+    '<small style="color:#9bc8e3">La somme doit être exactement égale au montant total.</small>';
+  customPartInputs().forEach(el=>el.addEventListener('input',updatePreview));
+}
+
 function updatePreview(){
   const box=document.getElementById('bankPartsPreview');
   const countEl=document.getElementById('bankPartCount');
@@ -106,11 +142,17 @@ function updatePreview(){
   const amount=num(amountEl.value);
   if(n<=1||amount<=0){box.style.display='none';return;}
   const mode=document.getElementById('bankPartMode')?.value||'split_total';
-  const parts=mode==='repeat_each'?Array.from({length:n},()=>money(amount)):splitAmounts(amount,n);
-  const total=money(parts.reduce((s,x)=>s+Number(x||0),0));
+  if(mode==='custom'&&customPartInputs().length!==n)syncCustomPartInputs(false);
+  const parts=mode==='repeat_each'
+    ? Array.from({length:n},()=>money(amount))
+    : mode==='custom'
+      ? customAmounts(n)
+      : splitAmounts(amount,n);
+  const total=money(parts.reduce((sum,x)=>sum+Number(x||0),0));
   const kind=source==='account_direct'?'prélèvements sur le compte':'achats '+(source==='card_lili'?'Carte Lili':'Carte Vincent');
   box.style.display='block';
-  box.textContent=n+' '+kind+' : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ')+' · Total '+euro2(total);
+  const mismatch=mode==='custom'&&cents(total)!==cents(amount);
+  box.textContent=n+' '+kind+' : '+parts.map((x,i)=>(i+1)+'/'+n+' '+euro2(x)).join(' · ')+' · Total '+euro2(total)+(mismatch?' · ⚠ doit faire '+euro2(amount):'');
 }
 
 function syncUI(){
@@ -129,6 +171,8 @@ function syncUI(){
   const enabled=!install;
   if(count)count.disabled=!enabled;
   if(mode)mode.disabled=!enabled;
+  syncCustomPartInputs(false);
+  customPartInputs().forEach(input=>input.disabled=!enabled);
   const hint=bw?.querySelector('small');
   if(hint){
     hint.textContent=install
@@ -191,7 +235,8 @@ function updateDebitMonth(force){
 
 function ensureCommunSplit(){ applySourceToLegacyFields(); }
 
-function cardBatchAmounts(amount,count,mode){
+function cardBatchAmounts(amount,count,mode,manual=[]){
+  if(mode==='custom')return manual.map(x=>money(x));
   return mode==='repeat_each'
     ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(amount))
     : splitAmounts(amount,count);
@@ -209,10 +254,12 @@ function applyConcernSplit(t,itemAmount,originalAmount,originalV,originalL){
     t.splitVincent=vc/100;t.splitLili=money(a-vc/100);
   }
 }
-function makeBankParts(amount,count,old,mode='split_total',unitAmount=0){
-  const amounts=mode==='repeat_each'
-    ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(unitAmount||0))
-    : splitAmounts(amount,count);
+function makeBankParts(amount,count,old,mode='split_total',unitAmount=0,manual=[]){
+  const amounts=mode==='custom'
+    ? manual.map(x=>money(x))
+    : mode==='repeat_each'
+      ? Array.from({length:Math.max(1,Math.min(12,Number(count||1)))},()=>money(unitAmount||0))
+      : splitAmounts(amount,count);
   return amounts.map((a,i)=>({
     id:old?.[i]?.id||('part-'+(i+1)),
     amount:a,
@@ -248,7 +295,7 @@ openTx=function(type,t=null){
   if(source)source.value=t?sourceFromTx(t):'account_direct';
   if(card)card.value=t?inferCardOwner(t):'';
   if(count)count.value=Array.isArray(t?.bankParts)&&t.bankParts.length?t.bankParts.length:1;
-  if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':'split_total';
+  if(mode)mode.value=t?.bankPartMode==='repeat_each'?'repeat_each':t?.bankPartMode==='custom'?'custom':'split_total';
   if(t?.paymentMethod==='card_deferred'&&count)count.value='1';
   applySourceToLegacyFields();
   if(t?.bankPartMode==='repeat_each'&&amountEl){
@@ -256,6 +303,10 @@ openTx=function(type,t=null){
     if(unit>0)amountEl.value=String(unit);
   }
   syncUI();
+  if(t?.bankPartMode==='custom'&&Array.isArray(t.bankParts)){
+    syncCustomPartInputs(true,t.bankParts.map(p=>Number(p.amount||0)));
+    updatePreview();
+  }
   if(!t)updateDebitMonth(false);
 };
 
@@ -282,6 +333,22 @@ if(saveBtn){
     const partMode=document.getElementById('bankPartMode')?.value||'split_total';
     const amountEl=document.getElementById('amount');
     const enteredAmount=money(num(amountEl?.value));
+    let manualAmounts=[];
+    if(count>1&&!installment&&partMode==='custom'){
+      syncCustomPartInputs(false);
+      manualAmounts=customAmounts(count);
+      if(manualAmounts.length!==count||manualAmounts.some(x=>x<=0)){
+        e.preventDefault();e.stopImmediatePropagation();
+        alert('Renseigne un montant supérieur à 0 € pour chaque prélèvement.');
+        return;
+      }
+      const manualTotal=money(manualAmounts.reduce((sum,x)=>sum+x,0));
+      if(cents(manualTotal)!==cents(enteredAmount)){
+        e.preventDefault();e.stopImmediatePropagation();
+        alert('Le total des montants personnalisés ('+euro2(manualTotal)+') doit être égal au montant total ('+euro2(enteredAmount)+').');
+        return;
+      }
+    }
     const repeatedUnit=(method==='direct_debit'&&count>1&&!installment&&partMode==='repeat_each')?enteredAmount:0;
     if(repeatedUnit>0&&amountEl){
       amountEl.value=String(money(repeatedUnit*count));
@@ -323,6 +390,10 @@ if(saveBtn){
             t.bankPartUnitAmount=repeatedUnit;
             t.amount=money(repeatedUnit*count);
             t.bankParts=makeBankParts(t.amount,count,t.bankParts,'repeat_each',repeatedUnit);
+          }else if(partMode==='custom'){
+            t.bankPartMode='custom';
+            delete t.bankPartUnitAmount;
+            t.bankParts=makeBankParts(t.amount,count,t.bankParts,'custom',0,manualAmounts);
           }else{
             t.bankPartMode='split_total';
             delete t.bankPartUnitAmount;
@@ -333,7 +404,7 @@ if(saveBtn){
         }else if(method==='card_deferred'&&count>1&&!installment){
           const originalAmount=Number(t.amount||enteredAmount||0);
           const originalV=Number(t.splitVincent||0),originalL=Number(t.splitLili||0);
-          const amounts=cardBatchAmounts(enteredAmount,count,partMode);
+          const amounts=cardBatchAmounts(enteredAmount,count,partMode,manualAmounts);
           const group=uid();
           amounts.forEach((a,i)=>{
             const row=i===0?t:{...t,id:uid(),debitedAmount:0};
