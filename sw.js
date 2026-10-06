@@ -1,4 +1,4 @@
-const CACHE='mes-comptes-v0529';
+const CACHE='mes-comptes-v0530';
 const ASSETS=['./','./index.html','./app.b64','./bankflow.js','./editfix.js','./grouping.js','./automation.js','./categorymemory.js','./categorysync.js','./cleanup-v0514.js','./projectionedit.js','./paymentmodel.js','./savingsledger.js','./creditseries.js','./versionguard.js','./photo.b64','./manifest.webmanifest','./photo.webp'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
