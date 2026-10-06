@@ -1,6 +1,7 @@
 (function(){
 'use strict';
-const CREDIT_SERIES_VERSION='0.5.29';
+const CREDIT_SERIES_VERSION='0.5.30';
+const MAX_LONG_SERIES_MONTHS=600;
 const CANCEL_FIELD='seriesCancellations';
 let pendingDelete=null;
 let activeEditTx=null;
@@ -160,6 +161,127 @@ function closeDeleteDialog(){
   pendingDelete=null;
 }
 
+function findRecurringCheckbox(){
+  const root=document.getElementById('txDialog')||document;
+  return [...root.querySelectorAll('input[type="checkbox"]')].find(el=>{
+    const text=(el.closest('label')?.textContent||'').toLowerCase();
+    return /dépense mensuelle récurrente|depense mensuelle recurrente/.test(text);
+  })||null;
+}
+function findRecurringMonthsInput(){
+  const root=document.getElementById('txDialog')||document;
+  return [...root.querySelectorAll('input[type="number"]')].find(el=>{
+    const text=(el.closest('label')?.textContent||'').toLowerCase();
+    return /nombre de mois à créer|nombre de mois a creer/.test(text);
+  })||null;
+}
+function unlockLongRecurringInput(){
+  const el=findRecurringMonthsInput();
+  if(!el)return null;
+  el.min='1';
+  el.max=String(MAX_LONG_SERIES_MONTHS);
+  el.step='1';
+  el.removeAttribute('maxlength');
+  el.setCustomValidity('');
+  const lab=el.closest('label');
+  if(lab&&!lab.querySelector('[data-long-credit-hint]')){
+    const hint=document.createElement('small');
+    hint.dataset.longCreditHint='1';
+    hint.textContent='Jusqu’à '+MAX_LONG_SERIES_MONTHS+' mois — adapté aux crédits longs.';
+    hint.style.cssText='display:block;margin-top:6px;color:#9bc8e3;font-size:.72rem;line-height:1.3';
+    lab.appendChild(hint);
+  }
+  return el;
+}
+function addMonth(month,delta){
+  if(!/^\d{4}-\d{2}$/.test(String(month||'')))return month||'';
+  const [y,m]=month.split('-').map(Number);
+  const d=new Date(y,m-1+delta,1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function dateInMonth(date,month){
+  if(!date||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/^\d{4}-\d{2}$/.test(month))return date||'';
+  const day=Number(date.slice(8,10)||1),[y,m]=month.split('-').map(Number);
+  const last=new Date(y,m,0).getDate();
+  return month+'-'+String(Math.min(day,last)).padStart(2,'0');
+}
+function cloneRecurringRow(seed,seriesId,index,total,month){
+  const x={...seed};
+  x.id=uid();
+  x.seriesId=seriesId;
+  x.seriesIndex=index;
+  x.seriesCount=total;
+  x.recurring=true;
+  x.month=month;
+  x.date=dateInMonth(seed.date,month);
+  x.debitedAmount=0;
+  x.projected=false;
+  if(Array.isArray(seed.bankParts))x.bankParts=seed.bankParts.map(p=>({...p,passed:false}));
+  delete x.autoValidatedAt;
+  delete x.autoValidationPaused;
+  if(x.plannedBankDate)x.plannedBankDate=dateInMonth(seed.plannedBankDate,month);
+  return x;
+}
+function expandRecurringSeries(seed,desired){
+  desired=Math.max(1,Math.min(MAX_LONG_SERIES_MONTHS,Math.floor(n(desired))));
+  if(!seed||seed.type!=='expense'||!seed.recurring||desired<2)return false;
+  const seriesId=seed.seriesId||('longrec-'+uid());
+  seed.seriesId=seriesId;
+  let rows=(state.transactions||[]).filter(x=>x.type==='expense'&&x.recurring&&x.seriesId===seriesId);
+  if(!rows.length)rows=[seed];
+  rows.sort((a,b)=>(n(a.seriesIndex)||0)-(n(b.seriesIndex)||0)||String(txMonth(a)).localeCompare(String(txMonth(b))));
+  rows.forEach((x,i)=>{
+    if(!n(x.seriesIndex))x.seriesIndex=i+1;
+    x.seriesCount=desired;
+    x.seriesId=seriesId;
+  });
+  rows.sort((a,b)=>n(a.seriesIndex)-n(b.seriesIndex));
+  let last=rows[rows.length-1];
+  let lastIndex=n(last.seriesIndex)||rows.length;
+  while(lastIndex<desired){
+    const nextIndex=lastIndex+1;
+    const month=addMonth(txMonth(last),1);
+    const x=cloneRecurringRow(last,seriesId,nextIndex,desired,month);
+    state.transactions.push(x);
+    last=x;
+    lastIndex=nextIndex;
+  }
+  return true;
+}
+let pendingLongSeriesSave=null;
+function captureLongSeriesSave(){
+  const recur=findRecurringCheckbox();
+  const count=unlockLongRecurringInput();
+  if(!recur?.checked||!count)return;
+  const desired=Math.floor(n(count.value));
+  if(desired<1||desired>MAX_LONG_SERIES_MONTHS)return;
+  const editId=document.getElementById('editId')?.value||'';
+  pendingLongSeriesSave={
+    desired,
+    editId,
+    beforeIds:new Set((state.transactions||[]).map(x=>x.id)),
+    existingSeriesId:editId?((state.transactions||[]).find(x=>x.id===editId)?.seriesId||''):''
+  };
+  setTimeout(finalizeLongSeriesSave,120);
+}
+function finalizeLongSeriesSave(){
+  const job=pendingLongSeriesSave;
+  pendingLongSeriesSave=null;
+  if(!job)return;
+  if(document.getElementById('txDialog')?.open)return;
+  let seed=null;
+  if(job.editId)seed=(state.transactions||[]).find(x=>x.id===job.editId)||null;
+  if(!seed&&job.existingSeriesId)seed=(state.transactions||[]).find(x=>x.seriesId===job.existingSeriesId)||null;
+  if(!seed){
+    const added=(state.transactions||[]).filter(x=>!job.beforeIds.has(x.id)&&x.type==='expense'&&x.recurring);
+    seed=added[0]||null;
+  }
+  if(!seed)return;
+  if(expandRecurringSeries(seed,job.desired)){
+    persistAndRender();
+  }
+}
+
 function findInstallmentCountInput(){
   const ids=['installmentCount','installCount','installments','installmentTotal','installmentMonths','creditInstallments'];
   for(const id of ids){const el=document.getElementById(id);if(el&&el.matches('input,select'))return el;}
@@ -199,7 +321,7 @@ if(oldOpenTx){
   openTx=function(type,t=null){
     activeEditTx=t||null;
     oldOpenTx(type,t);
-    setTimeout(updateRemainingHint,0);
+    setTimeout(()=>{unlockLongRecurringInput();updateRemainingHint();},0);
   };
 }
 
@@ -217,11 +339,17 @@ if(oldEffective){
   effectiveTransactions=function(m){return oldEffective(m).filter(t=>!suppressed(t));};
 }
 
+document.body.addEventListener('click',e=>{
+  if(e.target.closest('#saveTx'))captureLongSeriesSave();
+},true);
+
 document.body.addEventListener('input',e=>{
-  if(e.target===document.getElementById('installBox')||e.target===findInstallmentCountInput())updateRemainingHint();
+  unlockLongRecurringInput();
+  if(e.target===document.getElementById('installBox')||e.target===findInstallmentCountInput()||e.target===findRecurringMonthsInput())updateRemainingHint();
 },true);
 document.body.addEventListener('change',e=>{
-  if(e.target===document.getElementById('installBox')||e.target===findInstallmentCountInput())updateRemainingHint();
+  unlockLongRecurringInput();
+  if(e.target===document.getElementById('installBox')||e.target===findInstallmentCountInput()||e.target===findRecurringMonthsInput())updateRemainingHint();
 },true);
 
 document.body.addEventListener('click',e=>{
@@ -253,10 +381,12 @@ function patchExistingRows(){
 }
 const oldRender=typeof render==='function'?render:null;
 if(oldRender){
-  render=function(){oldRender();patchExistingRows();updateRemainingHint();};
+  render=function(){oldRender();unlockLongRecurringInput();patchExistingRows();updateRemainingHint();};
 }
 
 window.MesComptesCreditSeries={version:CREDIT_SERIES_VERSION,remainingText,removeCurrent,removeCurrentAndFuture};
 ensureDialog();
+unlockLongRecurringInput();
 patchExistingRows();
+new MutationObserver(()=>unlockLongRecurringInput()).observe(document.body,{childList:true,subtree:true});
 })();
