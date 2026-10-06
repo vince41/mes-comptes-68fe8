@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const CREDIT_SERIES_VERSION='0.5.31';
+const CREDIT_SERIES_VERSION='0.5.32';
 const MAX_LONG_SERIES_MONTHS=600;
 const CANCEL_FIELD='seriesCancellations';
 let pendingDelete=null;
@@ -211,7 +211,7 @@ function cloneRecurringRow(seed,seriesId,index,total,month){
   x.seriesId=seriesId;
   x.seriesIndex=index;
   x.seriesCount=total;
-  x.recurring=true;
+  x.recurring=false;
   x.finiteCreditSeries=true;
   x.month=month;
   x.date=dateInMonth(seed.date,month);
@@ -274,7 +274,7 @@ function normalizeRecurringSeries(seed,desired){
     if(row.seriesId!==seriesId){row.seriesId=seriesId;changed=true;}
     if(n(row.seriesIndex)!==i){row.seriesIndex=i;changed=true;}
     if(n(row.seriesCount)!==desired){row.seriesCount=desired;changed=true;}
-    if(row.recurring!==true){row.recurring=true;changed=true;}
+    if(row.recurring!==false){row.recurring=false;changed=true;}
     if(row.finiteCreditSeries!==true){row.finiteCreditSeries=true;changed=true;}
     if(row.month!==month){row.month=month;changed=true;}
     if(wantedDate&&row.date!==wantedDate){row.date=wantedDate;changed=true;}
@@ -388,7 +388,14 @@ if(oldOpenTx){
   openTx=function(type,t=null){
     activeEditTx=t||null;
     oldOpenTx(type,t);
-    setTimeout(()=>{unlockLongRecurringInput();updateRemainingHint();},0);
+    setTimeout(()=>{
+      unlockLongRecurringInput();
+      if(t?.finiteCreditSeries){
+        const recur=findRecurringCheckbox(); if(recur)recur.checked=true;
+        const months=findRecurringMonthsInput(); if(months&&n(t.seriesCount)>0)months.value=String(n(t.seriesCount));
+      }
+      updateRemainingHint();
+    },0);
   };
 }
 
@@ -399,25 +406,11 @@ if(oldTxMeta){
 
 const oldProjected=typeof projectedTransactions==='function'?projectedTransactions:null;
 if(oldProjected){
-  projectedTransactions=function(m){
-    return oldProjected(m).filter(t=>!suppressed(t)&&!matchesFiniteSeries(t));
-  };
+  projectedTransactions=function(m){return oldProjected(m).filter(t=>!suppressed(t));};
 }
 const oldEffective=typeof effectiveTransactions==='function'?effectiveTransactions:null;
 if(oldEffective){
-  effectiveTransactions=function(m){
-    const rows=oldEffective(m).filter(t=>!suppressed(t));
-    const explicitFinite=new Set(
-      (state.transactions||[])
-        .filter(x=>isFiniteCreditRow(x)&&txMonth(x)===m)
-        .map(x=>(x.seriesId||finiteFingerprint(x))+'|'+txMonth(x))
-    );
-    return rows.filter(t=>{
-      if(!t?.projected)return true;
-      const key=(t.seriesId||finiteFingerprint(t))+'|'+txMonth(t);
-      return !explicitFinite.has(key);
-    });
-  };
+  effectiveTransactions=function(m){return oldEffective(m).filter(t=>!suppressed(t));};
 }
 
 document.body.addEventListener('click',e=>{
@@ -453,16 +446,21 @@ document.body.addEventListener('click',e=>{
 },true);
 
 function patchExistingRows(){
+  const byId=new Map((state.transactions||[]).map(t=>[t.id,t]));
   document.querySelectorAll('.tx').forEach(row=>{
     const b=row.querySelector('[data-id]');if(!b)return;
-    const t=findTx(b.dataset.id);if(!t)return;
+    const t=byId.get(b.dataset.id);if(!t)return;
     const meta=row.querySelector('.tx-meta');if(!meta)return;
     const txt=remainingText(t);if(txt&&!meta.textContent.includes(txt))meta.textContent+=' · '+txt;
   });
 }
 const oldRender=typeof render==='function'?render:null;
 if(oldRender){
-  render=function(){oldRender();unlockLongRecurringInput();patchExistingRows();updateRemainingHint();};
+  render=function(){
+    oldRender();
+    patchExistingRows();
+    if(document.getElementById('txDialog')?.open){unlockLongRecurringInput();updateRemainingHint();}
+  };
 }
 
 window.MesComptesCreditSeries={version:CREDIT_SERIES_VERSION,remainingText,removeCurrent,removeCurrentAndFuture,repairLongCreditSeries};
@@ -472,5 +470,4 @@ if(repairLongCreditSeries()){
   try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
 }
 patchExistingRows();
-new MutationObserver(()=>unlockLongRecurringInput()).observe(document.body,{childList:true,subtree:true});
 })();
