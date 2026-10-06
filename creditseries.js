@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const CREDIT_SERIES_VERSION='0.5.30';
+const CREDIT_SERIES_VERSION='0.5.31';
 const MAX_LONG_SERIES_MONTHS=600;
 const CANCEL_FIELD='seriesCancellations';
 let pendingDelete=null;
@@ -212,6 +212,7 @@ function cloneRecurringRow(seed,seriesId,index,total,month){
   x.seriesIndex=index;
   x.seriesCount=total;
   x.recurring=true;
+  x.finiteCreditSeries=true;
   x.month=month;
   x.date=dateInMonth(seed.date,month);
   x.debitedAmount=0;
@@ -222,31 +223,97 @@ function cloneRecurringRow(seed,seriesId,index,total,month){
   if(x.plannedBankDate)x.plannedBankDate=dateInMonth(seed.plannedBankDate,month);
   return x;
 }
-function expandRecurringSeries(seed,desired){
+function finiteFingerprint(t){
+  return [norm(t?.label),Math.round(n(t?.amount)*100),clean(t?.owner),clean(t?.paymentMethod)].join('|');
+}
+function isFiniteCreditRow(t){
+  const total=counters(t).total;
+  return !!t?.finiteCreditSeries||(
+    t?.type==='expense'&&!!t?.seriesId&&!!t?.recurring&&total>12
+  );
+}
+function rowPaidScore(t){
+  let score=n(t?.debitedAmount);
+  if(Array.isArray(t?.bankParts))score+=t.bankParts.filter(p=>p?.passed).length*100000;
+  return score;
+}
+function normalizeRecurringSeries(seed,desired){
   desired=Math.max(1,Math.min(MAX_LONG_SERIES_MONTHS,Math.floor(n(desired))));
-  if(!seed||seed.type!=='expense'||!seed.recurring||desired<2)return false;
+  if(!seed||seed.type!=='expense'||desired<2)return false;
   const seriesId=seed.seriesId||('longrec-'+uid());
   seed.seriesId=seriesId;
-  let rows=(state.transactions||[]).filter(x=>x.type==='expense'&&x.recurring&&x.seriesId===seriesId);
+
+  let rows=(state.transactions||[]).filter(x=>x.type==='expense'&&x.seriesId===seriesId);
   if(!rows.length)rows=[seed];
-  rows.sort((a,b)=>(n(a.seriesIndex)||0)-(n(b.seriesIndex)||0)||String(txMonth(a)).localeCompare(String(txMonth(b))));
-  rows.forEach((x,i)=>{
-    if(!n(x.seriesIndex))x.seriesIndex=i+1;
-    x.seriesCount=desired;
-    x.seriesId=seriesId;
-  });
-  rows.sort((a,b)=>n(a.seriesIndex)-n(b.seriesIndex));
-  let last=rows[rows.length-1];
-  let lastIndex=n(last.seriesIndex)||rows.length;
-  while(lastIndex<desired){
-    const nextIndex=lastIndex+1;
-    const month=addMonth(txMonth(last),1);
-    const x=cloneRecurringRow(last,seriesId,nextIndex,desired,month);
-    state.transactions.push(x);
-    last=x;
-    lastIndex=nextIndex;
+
+  const months=rows.map(txMonth).filter(m=>/^\d{4}-\d{2}$/.test(m)).sort();
+  const startMonth=months[0]||txMonth(seed);
+  if(!/^\d{4}-\d{2}$/.test(startMonth))return false;
+
+  const byMonth=new Map();
+  for(const row of rows){
+    const month=txMonth(row);
+    if(!/^\d{4}-\d{2}$/.test(month))continue;
+    const prev=byMonth.get(month);
+    if(!prev||rowPaidScore(row)>rowPaidScore(prev))byMonth.set(month,row);
   }
-  return true;
+
+  let changed=false;
+  const keepIds=new Set();
+  let previous=byMonth.get(startMonth)||seed;
+  for(let i=1;i<=desired;i++){
+    const month=addMonth(startMonth,i-1);
+    let row=byMonth.get(month);
+    if(!row){
+      row=cloneRecurringRow(previous,seriesId,i,desired,month);
+      state.transactions.push(row);
+      changed=true;
+    }
+    const wantedDate=dateInMonth(row.date||previous.date||seed.date,month);
+    const wantedPlanned=row.plannedBankDate?dateInMonth(row.plannedBankDate,month):'';
+    if(row.seriesId!==seriesId){row.seriesId=seriesId;changed=true;}
+    if(n(row.seriesIndex)!==i){row.seriesIndex=i;changed=true;}
+    if(n(row.seriesCount)!==desired){row.seriesCount=desired;changed=true;}
+    if(row.recurring!==true){row.recurring=true;changed=true;}
+    if(row.finiteCreditSeries!==true){row.finiteCreditSeries=true;changed=true;}
+    if(row.month!==month){row.month=month;changed=true;}
+    if(wantedDate&&row.date!==wantedDate){row.date=wantedDate;changed=true;}
+    if(wantedPlanned&&row.plannedBankDate!==wantedPlanned){row.plannedBankDate=wantedPlanned;changed=true;}
+    row.projected=false;
+    keepIds.add(row.id);
+    previous=row;
+  }
+
+  const beforeLen=(state.transactions||[]).length;
+  state.transactions=(state.transactions||[]).filter(x=>x.seriesId!==seriesId||keepIds.has(x.id));
+  if(state.transactions.length!==beforeLen)changed=true;
+  return changed;
+}
+function expandRecurringSeries(seed,desired){
+  return normalizeRecurringSeries(seed,desired);
+}
+function repairLongCreditSeries(){
+  const groups=new Map();
+  for(const t of state.transactions||[]){
+    if(!isFiniteCreditRow(t)||!t.seriesId)continue;
+    if(!groups.has(t.seriesId))groups.set(t.seriesId,[]);
+    groups.get(t.seriesId).push(t);
+  }
+  let changed=false;
+  for(const rows of groups.values()){
+    const desired=Math.max(...rows.map(x=>n(x.seriesCount)||0));
+    if(desired<2)continue;
+    const seed=[...rows].sort((a,b)=>String(txMonth(a)).localeCompare(String(txMonth(b)))-0)[0]||rows[0];
+    if(normalizeRecurringSeries(seed,desired))changed=true;
+  }
+  return changed;
+}
+function matchesFiniteSeries(t){
+  if(!t)return false;
+  const stored=(state.transactions||[]).filter(isFiniteCreditRow);
+  if(t.seriesId&&stored.some(x=>x.seriesId===t.seriesId))return true;
+  const fp=finiteFingerprint(t),month=txMonth(t);
+  return stored.some(x=>finiteFingerprint(x)===fp&&txMonth(x)===month);
 }
 let pendingLongSeriesSave=null;
 function captureLongSeriesSave(){
@@ -332,11 +399,25 @@ if(oldTxMeta){
 
 const oldProjected=typeof projectedTransactions==='function'?projectedTransactions:null;
 if(oldProjected){
-  projectedTransactions=function(m){return oldProjected(m).filter(t=>!suppressed(t));};
+  projectedTransactions=function(m){
+    return oldProjected(m).filter(t=>!suppressed(t)&&!matchesFiniteSeries(t));
+  };
 }
 const oldEffective=typeof effectiveTransactions==='function'?effectiveTransactions:null;
 if(oldEffective){
-  effectiveTransactions=function(m){return oldEffective(m).filter(t=>!suppressed(t));};
+  effectiveTransactions=function(m){
+    const rows=oldEffective(m).filter(t=>!suppressed(t));
+    const explicitFinite=new Set(
+      (state.transactions||[])
+        .filter(x=>isFiniteCreditRow(x)&&txMonth(x)===m)
+        .map(x=>(x.seriesId||finiteFingerprint(x))+'|'+txMonth(x))
+    );
+    return rows.filter(t=>{
+      if(!t?.projected)return true;
+      const key=(t.seriesId||finiteFingerprint(t))+'|'+txMonth(t);
+      return !explicitFinite.has(key);
+    });
+  };
 }
 
 document.body.addEventListener('click',e=>{
@@ -384,9 +465,12 @@ if(oldRender){
   render=function(){oldRender();unlockLongRecurringInput();patchExistingRows();updateRemainingHint();};
 }
 
-window.MesComptesCreditSeries={version:CREDIT_SERIES_VERSION,remainingText,removeCurrent,removeCurrentAndFuture};
+window.MesComptesCreditSeries={version:CREDIT_SERIES_VERSION,remainingText,removeCurrent,removeCurrentAndFuture,repairLongCreditSeries};
 ensureDialog();
 unlockLongRecurringInput();
+if(repairLongCreditSeries()){
+  try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
+}
 patchExistingRows();
 new MutationObserver(()=>unlockLongRecurringInput()).observe(document.body,{childList:true,subtree:true});
 })();
