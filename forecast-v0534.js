@@ -98,6 +98,12 @@ function updateEstimatedCard(){
   if(small)small.textContent=`Départ estimé ${euro.format(e.start)} · CB déjà comptées ${euro.format(e.cards.known)} · CB restantes estimées ${euro.format(e.missing)}. Aucun débit fictif.`;
   const book=document.getElementById('forecast')?.closest('.metric');
   if(book){const heading=book.querySelector('span'),description=book.querySelector('small');if(heading)heading.textContent='Reste fin de mois hors CB à estimer';if(description)description.textContent='solde comptable prévisionnel, sans dépenses CB encore inconnues';}
+  const bankMetric=document.getElementById('currentBalance')?.closest('.metric');
+  if(bankMetric&&state.currentMonth>monthNow()){
+    const heading=bankMetric.querySelector('span'),description=bankMetric.querySelector('small');
+    if(heading)heading.textContent='Solde comptable simulé';
+    if(description)description.textContent='montant théorique, pas le solde bancaire réel';
+  }
   const initial=document.getElementById('startBalance')?.closest('.metric');
   if(initial&&state.currentMonth>monthNow()){
     const heading=initial.querySelector('span'),description=initial.querySelector('small');
