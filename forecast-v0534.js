@@ -131,6 +131,9 @@ function updateEstimatedCard(){
   const book=document.getElementById('forecast')?.closest('.metric');
   if(book){const heading=book.querySelector('span'),description=book.querySelector('small');if(heading)heading.textContent='Reste fin de mois hors CB à estimer';if(description)description.textContent='solde comptable prévisionnel, sans dépenses CB encore inconnues';}
   const bankMetric=document.getElementById('currentBalance')?.closest('.metric');
+  // La simulation de solde 'en temps réel' d'un mois futur est redondante avec les vraies prévisions.
+  // Masquage visuel uniquement : le calcul et les opérations restent inchangés.
+  if(bankMetric)bankMetric.style.display=state.currentMonth>monthNow()?'none':'';
   if(bankMetric&&state.currentMonth>monthNow()){
     const heading=bankMetric.querySelector('span'),description=bankMetric.querySelector('small');
     if(heading)heading.textContent='Solde comptable simulé';
