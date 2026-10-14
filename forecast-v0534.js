@@ -172,7 +172,7 @@ function ensureEstimatedCard(){
   if(document.getElementById('mcEstimatedCard'))return;
   const grid=document.querySelector('#accountsView .grid');if(!grid)return;
   const card=document.createElement('article');card.id='mcEstimatedCard';card.className='card mc-estimate-card';
-  card.innerHTML='<span>Solde estimé fin de mois avec CB</span><strong id="mcEstimatedEnd"></strong><small id="mcEstimateDetails"></small><button id="mcAdjustCbForecast" type="button">Ajuster ma moyenne CB</button>';
+  card.innerHTML='<span>Solde estimé fin de mois avec CB</span><strong id="mcEstimatedEnd"></strong><small id="mcEstimateDetails"></small><button id="mcAdjustCbForecast" type="button">Tendance CB / 4×</button>';
   card.querySelector('#mcAdjustCbForecast').addEventListener('click',openCbForecastDialog);
   const forecast=document.getElementById('forecast')?.closest('.metric');
   if(forecast)forecast.insertAdjacentElement('afterend',card);else grid.appendChild(card);
@@ -197,10 +197,16 @@ function openCbForecastDialog(){
     d.innerHTML=`<form id="mcCbForecastForm" style="display:grid;gap:13px;font:14px/1.5 system-ui">
       <h3 style="margin:0">Prévision mensuelle des cartes CB</h3>
       <p id="mcCbHistoryInfo" style="margin:0"></p>
-      <label style="display:grid;gap:6px">Budget total mensuel Vincent + Lili (€)
+      <p style="margin:0;font-size:.86rem">La tendance combine les cycles CB complets Vincent + Lili en excluant les 4× de la moyenne des dépenses courantes. Les mensualités des 4× encore actifs sont ajoutées séparément.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="display:grid;gap:5px">Habituel minimum (€)<input id="mcCbTypicalMin" type="number" min="1" max="1000000" step="1" inputmode="decimal" style="width:100%;box-sizing:border-box;padding:9px;border-radius:8px"></label>
+        <label style="display:grid;gap:5px">Habituel maximum (€)<input id="mcCbTypicalMax" type="number" min="1" max="1000000" step="1" inputmode="decimal" style="width:100%;box-sizing:border-box;padding:9px;border-radius:8px"></label>
+      </div>
+      <small>La fourchette guide les dépenses courantes mais n'empêche pas une nouvelle mensualité 4× d'augmenter la prévision.</small>
+      <label style="display:grid;gap:6px">Budget total fixe (€), échéances 4× incluses au mois de référence
         <input id="mcCbForecastAmount" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" style="font:inherit;border-radius:9px;border:1px solid #77afc8;background:#f8feff;padding:10px;color:#13283a" required>
       </label>
-      <p style="margin:0;font-size:.87rem">Montant prévu pour chaque prélèvement mensuel des deux cartes. Les achats déjà enregistrés sont déduits de ce budget. Si les dépenses réelles dépassent le budget, elles restent prises en compte.</p>
+      <p style="margin:0;font-size:.87rem">Le budget fixe est converti en dépenses courantes et mensualités 4×. Les nouveaux 4× augmentent la prévision ; ceux terminés la diminuent.</p>
       <p id="mcCbForecastInfo" style="margin:0"></p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button type="button" id="mcCbForecastAuto" style="padding:10px;background:#234861;color:#fff;border:1px solid #5b8ca4;border-radius:9px">Moyenne automatique</button>
@@ -210,9 +216,22 @@ function openCbForecastDialog(){
     </form>`;
     document.body.appendChild(d);
     d.querySelector('#mcCbForecastCancel').onclick=()=>d.close();
-    d.querySelector('#mcCbForecastAuto').onclick=()=>{
+    function saveBounds(){
+      const low=Number(d.querySelector('#mcCbTypicalMin').value);
+      const high=Number(d.querySelector('#mcCbTypicalMax').value);
+      if(!Number.isFinite(low)||!Number.isFinite(high)||low<=0||high<low||high>1000000){
+        alert('Fourchette CB incorrecte : minimum positif et maximum supérieur au minimum.');
+        return false;
+      }
       if(!state.settings)state.settings={};
+      state.settings.cardForecastTypicalMin=cash(low);
+      state.settings.cardForecastTypicalMax=cash(high);
+      return true;
+    }
+    d.querySelector('#mcCbForecastAuto').onclick=()=>{
+      if(!saveBounds())return;
       delete state.settings.cardForecastMonthlyTotal;
+      delete state.settings.cardForecastManualInstallmentAnchor;
       localStorage.setItem(KEY,JSON.stringify(state));
       d.close();render();
     };
@@ -220,18 +239,20 @@ function openCbForecastDialog(){
       ev.preventDefault();
       const val=Number(d.querySelector('#mcCbForecastAmount').value);
       if(!Number.isFinite(val)||val<=0||val>1000000)return alert('Entre un montant CB mensuel valable.');
-      if(!state.settings)state.settings={};
+      if(!saveBounds())return;
       state.settings.cardForecastMonthlyTotal=cash(val);
+      state.settings.cardForecastManualInstallmentAnchor=monthCardBreakdown(state.currentMonth).installments;
       localStorage.setItem(KEY,JSON.stringify(state));
       d.close();render();
     });
   }
   const auto=cardEstimate(state.currentMonth);
-  const histTotal=euro.format(auto.avg);
   const manual=Number(state.settings?.cardForecastMonthlyTotal||0);
-  d.querySelector('#mcCbHistoryInfo').textContent='Moyenne calculée sur les anciens cycles CB : '+histTotal+'.';
-  d.querySelector('#mcCbForecastAmount').value=manual>0?String(manual):String(auto.avg||'');
-  d.querySelector('#mcCbForecastInfo').textContent=manual>0?'Budget personnalisé actuel : '+euro.format(manual):'Mode automatique actuel : estimation à partir des cycles passés.';
+  d.querySelector('#mcCbTypicalMin').value=String(auto.typicalBounds.low);
+  d.querySelector('#mcCbTypicalMax').value=String(auto.typicalBounds.high);
+  d.querySelector('#mcCbHistoryInfo').textContent='Prévision : dépenses courantes '+euro.format(auto.normalBudget)+' + échéances CB en plusieurs fois '+euro.format(auto.scheduledInstallments)+' = '+euro.format(auto.normalBudget+auto.scheduledInstallments)+' · tendance '+auto.trend+' ('+auto.trendSamples+' cycles complets).';
+  d.querySelector('#mcCbForecastAmount').value=String(manual>0?manual:auto.normalBudget+auto.scheduledInstallments);
+  d.querySelector('#mcCbForecastInfo').textContent=manual>0?'Budget fixe actif : '+euro.format(manual)+' à la date de saisi. Les 4× le font évoluer.':'Tendance automatique active. Pour enregistrer la fourchette, clique sur Moyenne automatique.';
   d.showModal();
 }
 
@@ -239,7 +260,7 @@ function updateEstimatedCard(){
   ensureEstimatedCard();const e=estimatedMonth(state.currentMonth);
   const strong=document.getElementById('mcEstimatedEnd'),small=document.getElementById('mcEstimateDetails');
   if(strong){strong.textContent=euro.format(e.end);strong.classList.toggle('negative',e.end<0);}
-  if(small)small.textContent=`Départ estimé ${euro.format(e.start)} · CB déjà comptées ${euro.format(e.cards.known)} · Référence CB ${euro.format(e.cards.projected)} (${e.cards.manual?'personnalisée':'moyenne auto'}) · CB encore à prévoir ${euro.format(e.missing)}. Aucun débit fictif.`;
+  if(small)small.textContent=`Dépenses courantes prévues ${euro.format(e.cards.normalBudget)} · Échéances CB 4× actives ${euro.format(e.cards.scheduledInstallments)} · CB déjà saisies ${euro.format(e.cards.known)} · Autres achats CB à prévoir ${euro.format(e.missing)} · Tendance ${e.cards.trend}.`;
   const book=document.getElementById('forecast')?.closest('.metric');
   if(book){const heading=book.querySelector('span'),description=book.querySelector('small');if(heading)heading.textContent='Reste fin de mois hors CB à estimer';if(description)description.textContent='solde comptable prévisionnel, sans dépenses CB encore inconnues';}
   const bankMetric=document.getElementById('currentBalance')?.closest('.metric');
@@ -276,7 +297,7 @@ renderSavings=function(){
   put('savingMax',euro.format(a.max));
   put('savingEnd',euro.format(a.thisMonth.end));
   put('savingReserve',euro.format(a.safety));
-  put('savingCardAvg',euro.format(c.avg));
+  put('savingCardAvg',euro.format(c.normalBudget+c.scheduledInstallments));
   put('savingCardKnown',euro.format(c.known));
   put('savingCardProjected',euro.format(c.projected));
   put('savingNextCredits',euro.format(sum(creditsForMonth(m),x=>x.amount)));
@@ -287,7 +308,7 @@ renderSavings=function(){
     ?`Le mois de ${monthLabel(m)} ne dégage pas d'argent après les CB estimées : 0 € d'épargne conseillée.`
     :`Épargne évaluée à la FIN de ${monthLabel(m)}. Protection des soldes estimés : ${reasons.join(' · ')}. L'épargne proposée conserve en plus ${euro.format(a.safety)} de sécurité.`);
   put('savingLive',`CB de ${monthLabel(m)} : ${euro.format(c.known)} déjà saisies, ${euro.format(c.missing)} encore estimées.`);
-  put('savingDetail',`Référence CB ${c.manual?'personnalisée':'automatique'} : ${euro.format(c.projected)} au total (moyenne historique : ${euro.format(c.avg)}). Vincent : ${euro.format(c.owners.Vincent.known)} déjà saisis. Lili : ${euro.format(c.owners.Lili.known)} déjà saisis. Complément CB : ${euro.format(c.missing)}. Aucun débit fictif.`);
+  put('savingDetail',`Dépenses CB courantes prévues ${euro.format(c.normalBudget)} · Mensualités 4× actives ${euro.format(c.scheduledInstallments)} · CB enregistrées ${euro.format(c.known)} · Autres dépenses CB estimées ${euro.format(c.missing)} · Tendance ${c.trend}. Chaque fin ou nouveau paiement en plusieurs fois modifie les prévisions des mois concernés.`);
   const intro=document.getElementById('savingMonth')?.previousSibling;
   if(intro&&intro.nodeType===3)intro.nodeValue='Épargne possible fin ';
   const hero=document.querySelector('#savingsView .savings-hero strong');if(hero)hero.textContent='Épargne conseillée pour le mois affiché';
