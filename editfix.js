@@ -93,7 +93,14 @@ $('saveTx').onclick=function(e){
   const t=state.transactions.find(x=>x.id===id);if(!t)return;
   const type=$('txType').value,label=$('label').value.trim(),amount=Number($('amount').value);
   if(!label||!Number.isFinite(amount)||amount===0)return alert('Libellé et montant obligatoires.');
-  t.label=label;t.amount=amount;t.date=$('date').value;t.month=$('debitMonth').value||state.currentMonth;
+  const newDebitMonth=$('debitMonth').value||state.currentMonth;
+  const isInstallment=!!t.installmentGroup||Number(t.installmentCount||0)>1||
+    !!t.seriesId&&Number(t.seriesCount||0)>1&&Number(t.seriesCount||0)<=12;
+  if(isInstallment&&t.month&&newDebitMonth!==t.month){
+    if(!confirm('Cette échéance était prévue en '+t.month+' et sera déplacée vers '+newDebitMonth+
+      '. Confirmer ce changement de mois ?'))return;
+  }
+  t.label=label;t.amount=amount;t.date=$('date').value;t.month=newDebitMonth;
   if(type==='income'){
     t.incomeStatus=$('incomeStatus').value;
     $('txDialog').close();save();return;
