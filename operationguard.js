@@ -192,8 +192,24 @@ function openFinder(){
     box.append(desc,btn);wrap.appendChild(box);
   }
   if(!visible){
-    const info=document.createElement('p');info.textContent='Aucune échéance 4× encore visible dans les opérations actuellement enregistrées. Il faudra vérifier une ancienne sauvegarde ou la synchronisation avant toute recréation.';
+    const info=document.createElement('p');info.textContent='Aucune échéance 4× encore visible dans les opérations actuellement enregistrées. Ne les recrée pas en double : vérifie les sauvegardes ci-dessous.';
     wrap.appendChild(info);
+  }
+  // Diagnostics de récupération en lecture seule : on n'importe ni ne remplace jamais les comptes automatiquement.
+  for(const key of ['mes-comptes-backup-before-sync-v0541','mes-comptes-backup-before-v0534']){
+    let b=null;
+    try{const raw=JSON.parse(localStorage.getItem(key)||'null');b=raw?.state||raw;}catch(e){}
+    const saved=Array.isArray(b?.transactions)?b.transactions.filter(t=>t.type==='expense'&&fourTimes(t)):[];
+    if(!saved.length)continue;
+    const title=document.createElement('strong');
+    title.textContent=(key.includes('sync')?'Sauvegarde avant synchronisation':'Sauvegarde ancienne')+' · '+saved.length+' échéance(s) dans cette copie (consultation seulement)';
+    title.style.marginTop='12px';wrap.appendChild(title);
+    for(const t of saved.slice(0,80)){
+      const line=document.createElement('div');line.style.cssText='padding:7px;border:1px dashed #527c91;border-radius:8px;font-size:.86rem';
+      line.textContent=dateMonth(t)+' · '+String(t.label||'Sans libellé')+' · '+Number(t.amount||0).toFixed(2)+' € · '+(t.paymentMethod==='card_deferred'?'Carte '+String(t.cardOwner||t.owner||''):'Prélèvement compte');
+      wrap.appendChild(line);
+    }
+    if(saved.length>80){const p=document.createElement('p');p.textContent='80 premières lignes sur '+saved.length+' affichées.';wrap.appendChild(p);}
   }
   d.showModal();
 }
