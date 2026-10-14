@@ -173,6 +173,10 @@ function syncUI(){
   const cw=document.getElementById('cardOwnerWrap');
   const bw=document.getElementById('bankPartsWrap');
   const source=document.getElementById('debitSource')?.value||'account_direct';
+  const sourceHelp=document.querySelector('#debitSourceWrap small');
+  if(sourceHelp)sourceHelp.textContent=document.getElementById('editId')?.value
+    ? 'En modification : changer de carte ne déplace pas le mois du débit. Pour changer le mois, modifie « Mois du débit ».'
+    : 'Choisis où la dépense sera réellement débitée.';
   const count=document.getElementById('bankPartCount');
   const mode=document.getElementById('bankPartMode');
   if(cw)cw.style.display='none';
@@ -235,6 +239,11 @@ function updateDebitMonth(force){
   const source=document.getElementById('debitSource')?.value||'account_direct';
   const dm=document.getElementById('debitMonth');
   if(!dm)return;
+  // Les échéances déjà enregistrées ont un mois de débit contractuel.
+  // Modifier « Débité via » ou la carte ne doit pas déplacer l'opération
+  // au mois suivant. L'utilisateur peut toujours changer ce mois manuellement.
+  const editingId=document.getElementById('editId')?.value||'';
+  if(editingId)return;
   if(source==='card_vincent'||source==='card_lili'){
     const card=source==='card_lili'?'Lili':'Vincent';
     const date=document.getElementById('date')?.value;
