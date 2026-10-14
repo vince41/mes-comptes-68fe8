@@ -261,6 +261,11 @@ function updateEstimatedCard(){
   const strong=document.getElementById('mcEstimatedEnd'),small=document.getElementById('mcEstimateDetails');
   if(strong){strong.textContent=euro.format(e.end);strong.classList.toggle('negative',e.end<0);}
   if(small)small.textContent=`Dépenses courantes prévues ${euro.format(e.cards.normalBudget)} · Échéances CB 4× actives ${euro.format(e.cards.scheduledInstallments)} · CB déjà saisies ${euro.format(e.cards.known)} · Autres achats CB à prévoir ${euro.format(e.missing)} · Tendance ${e.cards.trend}.`;
+  const directInstallments=(summary(state.currentMonth).ex||[]).filter(t=>
+    isCardInstallment(t)&&cardAmount(t,'Vincent')+cardAmount(t,'Lili')===0
+    &&t.paymentMethod==='direct_debit');
+  if(small&&directInstallments.length)small.textContent+=' Attention : '+directInstallments.length+
+    ' échéance(s) en plusieurs fois sont classées en prélèvement direct. Si elles passent sur ta CB, corrige « Débité via » dans leurs fiches.';
   const book=document.getElementById('forecast')?.closest('.metric');
   if(book){const heading=book.querySelector('span'),description=book.querySelector('small');if(heading)heading.textContent='Reste fin de mois hors CB à estimer';if(description)description.textContent='solde comptable prévisionnel, sans dépenses CB encore inconnues';}
   const bankMetric=document.getElementById('currentBalance')?.closest('.metric');
