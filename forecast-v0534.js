@@ -30,8 +30,10 @@ function cardEstimate(m){
     const hist=completedHistory(m,who),mean=cash(average(hist));
     const recorded=cash(cardCycleTotal(m,who));
     const progress=cycleProgressForDebitMonth(m,who);
-    // Si le cycle est clos, seul le réel saisi compte. Sinon le complément repose sur les cycles complets.
-    const predicted=progress>=1?recorded:hist.length?cash(progress<=0?Math.max(recorded,mean):Math.max(recorded,mean,recorded+mean*(1-progress))):recorded;
+    // La moyenne historique represente le TOTAL du cycle, pas un budget a ajouter aux achats saisis.
+    // Completer uniquement la difference non encore saisie. Ne rien ajouter si le cycle est clos.
+    // Si les achats reels depassent la moyenne, privilegier le montant reel sans jamais le reduire.
+    const predicted=progress>=1||!hist.length?recorded:cash(Math.max(recorded,mean));
     owners[who]={avg:mean,known:recorded,projected:predicted,missing:cash(Math.max(0,predicted-recorded)),progress,samples:hist.length};
     known+=recorded;expected+=predicted;avg+=mean;history=history.concat(hist);
   }
