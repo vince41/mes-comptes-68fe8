@@ -265,9 +265,21 @@ function normalizeRecurringSeries(seed,desired){
     const month=addMonth(startMonth,i-1);
     let row=byMonth.get(month);
     if(!row){
-      row=cloneRecurringRow(previous,seriesId,i,desired,month);
+      const candidate=cloneRecurringRow(previous,seriesId,i,desired,month);
+      // Ne plus régénérer une échéance volontairement supprimée.
+      if(suppressed(candidate)){
+        previous=candidate;
+        continue;
+      }
+      row=candidate;
       state.transactions.push(row);
       changed=true;
+    }
+    if(suppressed(row)){
+      // Une échéance supprimée ne doit pas être conservée dans la série normalisée.
+      changed=true;
+      previous=row;
+      continue;
     }
     const wantedDate=dateInMonth(row.date||previous.date||seed.date,month);
     const wantedPlanned=row.plannedBankDate?dateInMonth(row.plannedBankDate,month):'';
