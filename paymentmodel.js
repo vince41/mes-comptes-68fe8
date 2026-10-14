@@ -75,7 +75,19 @@ function ensureUI(){
   document.getElementById('bankPartMode')?.addEventListener('change',()=>{syncCustomPartInputs(true);updatePreview();});
   document.getElementById('amount')?.addEventListener('input',updatePreview);
   document.getElementById('date')?.addEventListener('change',()=>updateDebitMonth(false));
-  document.getElementById('installBox')?.addEventListener('change',syncUI);
+  document.getElementById('installBox')?.addEventListener('change',()=>{
+    const checked=!!document.getElementById('installBox')?.checked;
+    const editing=!!document.getElementById('editId')?.value;
+    const source=document.getElementById('debitSource');
+    // Nouvel achat 4× : choisir par défaut la carte Vincent, pas le compte direct.
+    // Une ancienne opération modifiée ou un choix explicite après ce clic reste libre.
+    if(checked&&!editing&&source?.value==='account_direct'){
+      source.value='card_vincent';
+      applySourceToLegacyFields();
+      updateDebitMonth(true);
+    }
+    syncUI();
+  });
 }
 
 function inferCardOwner(t){
