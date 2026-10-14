@@ -86,7 +86,8 @@ function markOne(t){
   if(!t)return;
   const row={id:String(t.id||''),signature:t.projected?projectedSignature(t):'',at:new Date().toISOString()};
   if(!Array.isArray(state.operationTombstones))state.operationTombstones=[];
-  if(!state.operationTombstones.some(d=>d.id===row.id&&d.signature===row.signature))state.operationTombstones.push(row);
+  const previous=state.operationTombstones.find(d=>d.id===row.id&&d.signature===row.signature);
+  if(previous)previous.at=row.at;else state.operationTombstones.push(row);
   tombstoneCache=null;
 }
 function markSeries(t,mode){
