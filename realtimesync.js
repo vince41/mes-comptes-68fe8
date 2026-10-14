@@ -108,21 +108,68 @@ function buildBundle(){
   }
   return {schema:1,state:cloneStateForSync(),extras,exportedAt:new Date().toISOString()};
 }
-function applyBundle(bundle){
+
+const DELETION_JOURNAL='mes-comptes-deletion-journal-v1';
+const SYNC_BACKUP='mes-comptes-backup-before-sync-v0541';
+function deletionJournal(){
+  try{const rows=JSON.parse(localStorage.getItem(DELETION_JOURNAL)||'[]');return Array.isArray(rows)?rows:[];}catch(e){return[];}
+}
+function unionMarkers(...groups){
+  const uniq=new Map();
+  for(const rows of groups){
+    for(const m of Array.isArray(rows)?rows:[]){
+      if(!m||typeof m!=='object')continue;
+      const key=[String(m.id||''),String(m.signature||''),String(m.key||''),String(m.mode||''),String(m.index||''),String(m.month||''),String(m.fromIndex||''),String(m.fromMonth||'')].join('|');
+      uniq.set(key,m);
+    }
+  }
+  return [...uniq.values()];
+}
+function mergeRemoteState(incoming,local,mergePending){
+  const remote={...incoming};
+  remote.operationTombstones=unionMarkers(incoming.operationTombstones,local.operationTombstones,deletionJournal());
+  remote.seriesCancellations=unionMarkers(incoming.seriesCancellations,local.seriesCancellations);
+  if(mergePending){
+    // Ne pas écraser des modifications locales qui attendent encore leur envoi.
+    // Fusion des transactions par ID : on conserve les ajouts des deux appareils,
+    // la copie locale prime pour un même ID pendant une modification non envoyée.
+    const map=new Map();
+    for(const t of Array.isArray(incoming.transactions)?incoming.transactions:[])if(t?.id)map.set(String(t.id),t);
+    for(const t of Array.isArray(local.transactions)?local.transactions:[])if(t?.id)map.set(String(t.id),t);
+    remote.transactions=[...map.values()];
+    remote.months={...(incoming.months||{}),...(local.months||{})};
+    remote.settings={...(incoming.settings||{}),...(local.settings||{})};
+    for(const field of ['savingsLedger','seriesCancellations']){
+      if(field==='seriesCancellations')continue;
+      if(Array.isArray(local[field]))remote[field]=unionMarkers(incoming[field],local[field]);
+    }
+  }
+  const removed=new Set(remote.operationTombstones.map(t=>String(t.id||'')).filter(Boolean));
+  if(Array.isArray(remote.transactions))remote.transactions=remote.transactions.filter(t=>!removed.has(String(t.id||'')));
+  return remote;
+}
+function applyBundle(bundle,mergePending=false){
   if(!bundle||typeof bundle!=='object'||!bundle.state||typeof bundle.state!=='object')return false;
   const keepMonth=state&&state.currentMonth;
+  const merged=mergeRemoteState(bundle.state,state||{},mergePending);
   applyingRemote=true;
   try{
+    // Copie locale de récupération avant tout remplacement venant d'un autre appareil.
+    try{
+      if(!localStorage.getItem(SYNC_BACKUP))
+        localStorage.setItem(SYNC_BACKUP,JSON.stringify({at:new Date().toISOString(),state}));
+    }catch(e){}
     for(const k of Object.keys(state||{}))delete state[k];
-    Object.assign(state,bundle.state);
+    Object.assign(state,merged);
     if(keepMonth)state.currentMonth=keepMonth;
+    try{localStorage.setItem(DELETION_JOURNAL,JSON.stringify(state.operationTombstones));}catch(e){}
     if(bundle.extras&&typeof bundle.extras==='object'){
       for(const k of EXTRA_KEYS){
         if(Object.prototype.hasOwnProperty.call(bundle.extras,k))localStorage.setItem(k,String(bundle.extras[k]));
       }
     }
     localStorage.setItem(KEY,JSON.stringify(state));
-    localStorage.setItem(DIRTY_KEY,'0');
+    if(!mergePending)localStorage.setItem(DIRTY_KEY,'0');
     try{if(typeof render==='function')render();}catch(e){console.warn('Mes Comptes sync render',e);}
     try{window.dispatchEvent(new CustomEvent('mescomptes:remote-sync',{detail:{at:now()}}));}catch(e){}
     return true;
@@ -365,8 +412,16 @@ async function receiveRemote(payload,force){
   if(!force&&remoteAt&&remoteAt<=lastSeen)return;
   try{
     const bundle=await decryptBundle(payload,secretBytes);
-    if(applyBundle(bundle)){
+    const pending=!force&&dirty();
+    const remoteDeleted=Array.isArray(bundle.state?.operationTombstones)?bundle.state.operationTombstones:[];
+    const remoteSeries=Array.isArray(bundle.state?.seriesCancellations)?bundle.state.seriesCancellations:[];
+    const localDeleted=unionMarkers(state.operationTombstones,deletionJournal());
+    const localSeries=unionMarkers(state.seriesCancellations);
+    const missingDeletes=localDeleted.some(d=>!remoteDeleted.some(x=>x.id===d.id&&x.signature===d.signature));
+    const missingSeries=localSeries.some(d=>!remoteSeries.some(x=>x.key===d.key&&x.mode===d.mode&&x.index===d.index&&x.fromIndex===d.fromIndex&&x.month===d.month&&x.fromMonth===d.fromMonth));
+    if(applyBundle(bundle,pending)){
       localStorage.setItem(LAST_REMOTE_KEY,String(remoteAt||now()));
+      if(pending||missingDeletes||missingSeries){markDirty();schedulePush();}
       setStatus('ok','Synchronisé');
     }
   }catch(e){
