@@ -40,7 +40,10 @@ function cardEstimate(m){
   // Un budget CB mensuel personnalisé prime sur la moyenne automatique, pour tous les mois futurs.
   // Les sommes déjà saisies sont incluses dans ce budget et ne sont jamais ajoutées deux fois.
   const setting=Number(state.settings?.cardForecastMonthlyTotal);
-  const manual=Number.isFinite(setting)&&setting>0;
+  const hasCustomBudget=Number.isFinite(setting)&&setting>0;
+  // Quand les deux cycles sont déjà clos, seul le montant réellement saisi compte.
+  const cycleOpen=owners.Vincent.progress<1||owners.Lili.progress<1;
+  const manual=hasCustomBudget&&cycleOpen;
   if(manual){
     const total=cash(Math.max(known,setting));
     const missing=cash(total-known);
@@ -174,8 +177,7 @@ function updateEstimatedCard(){
   const book=document.getElementById('forecast')?.closest('.metric');
   if(book){const heading=book.querySelector('span'),description=book.querySelector('small');if(heading)heading.textContent='Reste fin de mois hors CB à estimer';if(description)description.textContent='solde comptable prévisionnel, sans dépenses CB encore inconnues';}
   const bankMetric=document.getElementById('currentBalance')?.closest('.metric');
-  // La simulation de solde 'en temps réel' d'un mois futur est redondante avec les vraies prévisions.
-  // Montrer toujours le solde du mois SELECTIONNE, et non celui du mois précédent.
+  // Afficher le solde du MOIS SÉLECTIONNÉ, sans reprendre celui du mois précédent.
   if(bankMetric){
     bankMetric.style.display='';
     const heading=bankMetric.querySelector('span'),description=bankMetric.querySelector('small');
