@@ -83,6 +83,9 @@ function markSeries(t,mode){
   }
 }
 function removeOperation(t,allFollowing=false){
+  // Garder une copie de récupération du compte AVANT une suppression.
+  try{localStorage.setItem('mes-comptes-backup-before-delete-v0541',
+    JSON.stringify({at:new Date().toISOString(),state}));}catch(e){}
   const key=recKey(t),i=idx(t),m=dateMonth(t);
   const selected=(state.transactions||[]).filter(x=>{
     if(x.id===t.id)return true;
@@ -196,13 +199,13 @@ function openFinder(){
     wrap.appendChild(info);
   }
   // Diagnostics de récupération en lecture seule : on n'importe ni ne remplace jamais les comptes automatiquement.
-  for(const key of ['mes-comptes-backup-before-sync-v0541','mes-comptes-backup-before-v0534']){
+  for(const key of ['mes-comptes-backup-before-delete-v0541','mes-comptes-backup-before-sync-v0541','mes-comptes-backup-before-v0534']){
     let b=null;
     try{const raw=JSON.parse(localStorage.getItem(key)||'null');b=raw?.state||raw;}catch(e){}
     const saved=Array.isArray(b?.transactions)?b.transactions.filter(t=>t.type==='expense'&&fourTimes(t)):[];
     if(!saved.length)continue;
     const title=document.createElement('strong');
-    title.textContent=(key.includes('sync')?'Sauvegarde avant synchronisation':'Sauvegarde ancienne')+' · '+saved.length+' échéance(s) dans cette copie (consultation seulement)';
+    title.textContent=(key.includes('before-delete')?'Sauvegarde avant suppression':key.includes('sync')?'Sauvegarde avant synchronisation':'Sauvegarde ancienne')+' · '+saved.length+' échéance(s) dans cette copie (consultation seulement)';
     title.style.marginTop='12px';wrap.appendChild(title);
     for(const t of saved.slice(0,80)){
       const line=document.createElement('div');line.style.cssText='padding:7px;border:1px dashed #527c91;border-radius:8px;font-size:.86rem';
