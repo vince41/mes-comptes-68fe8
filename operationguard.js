@@ -23,14 +23,18 @@ const fourTimes=t=>{
 function readJournal(){
   try{const v=JSON.parse(localStorage.getItem(JOURNAL)||'[]');return Array.isArray(v)?v:[];}catch(e){return[];}
 }
+let tombstoneCache=null;
 function tombstones(){
+  if(tombstoneCache)return tombstoneCache;
   const map=new Map();
   for(const t of [...readJournal(),...(Array.isArray(state.operationTombstones)?state.operationTombstones:[])]){
     if(t&&(t.id||t.signature))map.set(String(t.id||'')+'|'+String(t.signature||''),t);
   }
-  return [...map.values()];
+  tombstoneCache=[...map.values()];
+  return tombstoneCache;
 }
 function reconcileJournal(){
+  tombstoneCache=null;
   const rows=tombstones();
   if(!Array.isArray(state.operationTombstones)||state.operationTombstones.length!==rows.length){
     state.operationTombstones=rows;
@@ -64,6 +68,7 @@ function markOne(t){
   const row={id:String(t.id||''),signature:t.projected?projectedSignature(t):'',at:new Date().toISOString()};
   if(!Array.isArray(state.operationTombstones))state.operationTombstones=[];
   if(!state.operationTombstones.some(d=>d.id===row.id&&d.signature===row.signature))state.operationTombstones.push(row);
+  tombstoneCache=null;
 }
 function markSeries(t,mode){
   const key=recKey(t);
@@ -172,7 +177,7 @@ function openFinder(){
   const rows=(state.transactions||[]).filter(t=>t.type==='expense'&&fourTimes(t));
   const sorted=[...rows].sort((a,b)=>dateMonth(a).localeCompare(dateMonth(b))||(a.label||'').localeCompare(b.label||''));
   d.querySelector('#mcFindDescription').textContent=rows.length+
-    ' échéance(s) trouvée(s) dans les données du compte, tous mois confondus. Les opérations rayées par suppression ne sont pas proposées.';
+    ' ligne(s) de paiement en plusieurs fois détectée(s) dans les données du compte, tous mois confondus. Les opérations supprimées sont exclues.';
   const wrap=d.querySelector('#mcFindResults');wrap.replaceChildren();
   let visible=0;
   for(const t of sorted){
@@ -195,5 +200,9 @@ function openFinder(){
 const oldRender=render;
 render=function(){oldRender();ensureFinder();addDeleteButtons();};
 reconcileJournal();
+window.addEventListener('mescomptes:remote-sync',()=>{
+  tombstoneCache=null;
+  reconcileJournal();
+});
 render();
 })();
