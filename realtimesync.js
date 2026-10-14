@@ -120,7 +120,8 @@ function unionMarkers(...groups){
     for(const m of Array.isArray(rows)?rows:[]){
       if(!m||typeof m!=='object')continue;
       const key=[String(m.id||''),String(m.signature||''),String(m.key||''),String(m.mode||''),String(m.index||''),String(m.month||''),String(m.fromIndex||''),String(m.fromMonth||'')].join('|');
-      uniq.set(key,m);
+      const existing=uniq.get(key);
+      if(!existing||(Date.parse(m.at||m.createdAt)||0)>=(Date.parse(existing.at||existing.createdAt)||0))uniq.set(key,m);
     }
   }
   return [...uniq.values()];
@@ -128,6 +129,7 @@ function unionMarkers(...groups){
 function mergeRemoteState(incoming,local,mergePending){
   const remote={...incoming};
   remote.operationTombstones=unionMarkers(incoming.operationTombstones,local.operationTombstones,deletionJournal());
+  remote.operationRestorations=unionMarkers(incoming.operationRestorations,local.operationRestorations);
   remote.seriesCancellations=unionMarkers(incoming.seriesCancellations,local.seriesCancellations);
   if(mergePending){
     // Ne pas écraser des modifications locales qui attendent encore leur envoi.
@@ -144,7 +146,16 @@ function mergeRemoteState(incoming,local,mergePending){
       if(Array.isArray(local[field]))remote[field]=unionMarkers(incoming[field],local[field]);
     }
   }
-  const removed=new Set(remote.operationTombstones.map(t=>String(t.id||'')).filter(Boolean));
+  const restoredAt=new Map();
+  for(const t of remote.operationRestorations){
+    if(!t.id)continue;
+    const id=String(t.id),at=Date.parse(t.at)||0;
+    if(at>(restoredAt.get(id)||0))restoredAt.set(id,at);
+  }
+  // Une restauration explicite postérieure à la suppression préserve la ligne.
+  const removed=new Set(remote.operationTombstones
+    .filter(t=>!(restoredAt.get(String(t.id||''))>(Date.parse(t.at)||0)))
+    .map(t=>String(t.id||'')).filter(Boolean));
   if(Array.isArray(remote.transactions))remote.transactions=remote.transactions.filter(t=>!removed.has(String(t.id||'')));
   return remote;
 }
@@ -415,13 +426,16 @@ async function receiveRemote(payload,force){
     const pending=!force&&dirty();
     const remoteDeleted=Array.isArray(bundle.state?.operationTombstones)?bundle.state.operationTombstones:[];
     const remoteSeries=Array.isArray(bundle.state?.seriesCancellations)?bundle.state.seriesCancellations:[];
+    const remoteRestores=Array.isArray(bundle.state?.operationRestorations)?bundle.state.operationRestorations:[];
     const localDeleted=unionMarkers(state.operationTombstones,deletionJournal());
+    const localRestores=unionMarkers(state.operationRestorations);
     const localSeries=unionMarkers(state.seriesCancellations);
     const missingDeletes=localDeleted.some(d=>!remoteDeleted.some(x=>x.id===d.id&&x.signature===d.signature));
     const missingSeries=localSeries.some(d=>!remoteSeries.some(x=>x.key===d.key&&x.mode===d.mode&&x.index===d.index&&x.fromIndex===d.fromIndex&&x.month===d.month&&x.fromMonth===d.fromMonth));
+    const missingRestores=localRestores.some(d=>!remoteRestores.some(x=>x.id===d.id&&x.signature===d.signature&&x.at===d.at));
     if(applyBundle(bundle,pending)){
       localStorage.setItem(LAST_REMOTE_KEY,String(remoteAt||now()));
-      if(pending||missingDeletes||missingSeries){markDirty();schedulePush();}
+      if(pending||missingDeletes||missingSeries||missingRestores){markDirty();schedulePush();}
       setStatus('ok','Synchronisé');
     }
   }catch(e){

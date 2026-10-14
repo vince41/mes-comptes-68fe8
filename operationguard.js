@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-// V0.5.41 - Suppressions explicites et recherche des échéances.
+// V0.5.42 - Restaurer uniquement les échéances masquées, sans recréer les achats.
 // Ne réécrit jamais la liste entière d'opérations à l'ouverture.
 const JOURNAL='mes-comptes-deletion-journal-v1';
 const dateMonth=t=>String(t?.month||t?.debitMonth||t?.date||state.currentMonth||'').slice(0,7);
@@ -42,17 +42,36 @@ function reconcileJournal(){
   try{localStorage.setItem(JOURNAL,JSON.stringify(rows));}catch(e){}
   return rows;
 }
+function restorationTime(t){
+  if(!t)return 0;
+  const id=String(t.id||''),sig=t.projected?projectedSignature(t):'';
+  return Math.max(0,...(Array.isArray(state.operationRestorations)?state.operationRestorations:[])
+    .filter(r=>id&&r.id===id||sig&&r.signature===sig)
+    .map(r=>Date.parse(r.at)||0));
+}
 function isDeleted(t){
   if(!t)return false;
   const id=String(t.id||''),sig=t.projected?projectedSignature(t):'';
+  const restored=restorationTime(t);
   for(const d of tombstones()){
-    if(id&&d.id===id)return true;
-    if(sig&&d.signature===sig)return true;
+    if(id&&d.id===id||sig&&d.signature===sig){
+      if(!restored||(Date.parse(d.at)||0)>=restored)return true;
+    }
   }
   return false;
 }
 const oldEffective=effectiveTransactions;
-effectiveTransactions=function(m){return oldEffective(m).filter(t=>!isDeleted(t));};
+effectiveTransactions=function(m){
+  const base=oldEffective(m).filter(t=>!isDeleted(t));
+  // Uniquement pour une opération existante explicitement restaurée :
+  // réinjecter dans l'affichage si un ancien filtre la masque encore.
+  const ids=new Set(base.map(t=>String(t.id||'')));
+  for(const t of state.transactions||[]){
+    if(t?.type!=='expense'||t.month!==m||!restorationTime(t)||isDeleted(t)||ids.has(String(t.id||'')))continue;
+    base.push(t);ids.add(String(t.id||''));
+  }
+  return base;
+};
 const oldProjected=projectedTransactions;
 projectedTransactions=function(m){return oldProjected(m).filter(t=>!isDeleted(t));};
 function persist(){
@@ -67,7 +86,8 @@ function markOne(t){
   if(!t)return;
   const row={id:String(t.id||''),signature:t.projected?projectedSignature(t):'',at:new Date().toISOString()};
   if(!Array.isArray(state.operationTombstones))state.operationTombstones=[];
-  if(!state.operationTombstones.some(d=>d.id===row.id&&d.signature===row.signature))state.operationTombstones.push(row);
+  const previous=state.operationTombstones.find(d=>d.id===row.id&&d.signature===row.signature);
+  if(previous)previous.at=row.at;else state.operationTombstones.push(row);
   tombstoneCache=null;
 }
 function markSeries(t,mode){
@@ -171,6 +191,18 @@ function openFinder(){
     document.body.appendChild(d);
     d.querySelector('#mcFindClose').onclick=()=>d.close();
     d.addEventListener('click',e=>{
+      const restore=e.target.closest('[data-mc-restore-id]');
+      if(restore){
+        const t=(state.transactions||[]).find(x=>String(x.id)===restore.dataset.mcRestoreId);
+        if(!t)return;
+        if(!confirm('Réafficher '+String(t.label||'ce paiement')+' ('+Number(t.amount||0).toFixed(2)+' €) dans les comptes de '+dateMonth(t)+' ? Cela conserve le même paiement, sans doublon.'))return;
+        if(!Array.isArray(state.operationRestorations))state.operationRestorations=[];
+        state.operationRestorations.push({id:String(t.id),signature:t.projected?projectedSignature(t):'',at:new Date().toISOString()});
+        state.currentMonth=dateMonth(t);
+        d.close();
+        persist();
+        return;
+      }
       const b=e.target.closest('[data-mc-view-month]');
       if(!b)return;
       state.currentMonth=b.dataset.mcViewMonth;
@@ -190,9 +222,21 @@ function openFinder(){
     const box=document.createElement('div');box.style.cssText='display:grid;gap:4px;padding:9px;border:1px solid #346485;border-radius:9px';
     const desc=document.createElement('span');
     desc.textContent=month+' · '+String(t.label||'Sans libellé')+' · '+Number(t.amount||0).toFixed(2)+' € · '+(t.paymentMethod==='card_deferred'?'Carte '+String(t.cardOwner||t.owner||''):'Prélèvement compte')+' · '+(t.installmentIndex||t.seriesIndex||'?')+'/'+(t.installmentCount||t.seriesCount||'?');
+    const inAccounts=(effectiveTransactions(month)||[]).some(x=>String(x.id||'')===String(t.id||''));
+    const label=document.createElement('span');
+    label.textContent=inAccounts?'✓ Cette échéance est prise en compte dans les comptes.':'⚠ Enregistrée, mais MASQUÉE dans les comptes (ancienne annulation ou filtre).';
+    label.style.cssText='font-size:.87rem;font-weight:750;color:'+(inAccounts?'#9cf0c3':'#ffd48a');
     const btn=document.createElement('button');btn.type='button';btn.dataset.mcViewMonth=month;btn.textContent='Voir le mois '+month;
     btn.style.cssText='max-width:max-content;padding:8px;border:1px solid #5a9fc3;background:#124d70;color:#fff;border-radius:8px';
-    box.append(desc,btn);wrap.appendChild(box);
+    box.append(desc,label,btn);
+    if(!inAccounts){
+      const restore=document.createElement('button');
+      restore.type='button';restore.dataset.mcRestoreId=String(t.id||'');
+      restore.textContent='↩ Réafficher ce paiement dans les comptes';
+      restore.style.cssText='max-width:max-content;padding:9px;border:1px solid #caa358;background:#74541d;color:#fff;border-radius:8px;font-weight:750';
+      box.appendChild(restore);
+    }
+    wrap.appendChild(box);
   }
   if(!visible){
     const info=document.createElement('p');info.textContent='Aucune échéance 4× encore visible dans les opérations actuellement enregistrées. Ne les recrée pas en double : vérifie les sauvegardes ci-dessous.';

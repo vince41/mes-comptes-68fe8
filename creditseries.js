@@ -53,7 +53,17 @@ function markerMatches(t,m){
   }
   return false;
 }
-function suppressed(t){return cancellations().some(m=>markerMatches(t,m));}
+function suppressed(t){
+  const markers=cancellations().filter(m=>markerMatches(t,m));
+  if(!markers.length)return false;
+  // Une restauration explicite ne concerne qu'une échéance identifiée.
+  // Elle ne restaure pas automatiquement les autres échéances de la série.
+  const restores=(Array.isArray(state.operationRestorations)?state.operationRestorations:[])
+    .filter(r=>String(r.id||'')&&String(r.id)===String(t?.id||''));
+  const lastRestore=Math.max(0,...restores.map(r=>Date.parse(r.at)||0));
+  const lastCancel=Math.max(0,...markers.map(m=>Date.parse(m.createdAt)||0));
+  return !lastRestore||lastCancel>=lastRestore;
+}
 function persistAndRender(){
   try{state.transactions=categorizeTransactions(state.transactions);}catch(e){}
   try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
