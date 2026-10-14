@@ -93,6 +93,36 @@ function ensureEstimatedCard(){
     document.head.appendChild(style);
   }
 }
+
+function updateLiveBalanceCard(){
+  const current=monthNow(),viewed=state.currentMonth;
+  let card=document.getElementById('mcLiveBalanceCard');
+  if(viewed===current){
+    if(card)card.remove();
+    return;
+  }
+  const target=document.getElementById('currentBalance')?.closest('.metric');
+  if(!target)return;
+  if(!card){
+    card=document.createElement('article');
+    card.id='mcLiveBalanceCard';
+    card.className='card mc-live-balance-card';
+    card.innerHTML='<span>Solde réel suivi aujourd\'hui</span><strong id="mcLiveBalanceValue"></strong><small id="mcLiveBalanceHelp"></small>';
+    target.insertAdjacentElement('afterend',card);
+  }
+  if(!document.getElementById('mcLiveBalanceStyle')){
+    const style=document.createElement('style');
+    style.id='mcLiveBalanceStyle';
+    style.textContent='.mc-live-balance-card{display:flex;flex-direction:column;justify-content:center;gap:8px;padding:16px 19px;border:1px solid #669aca;border-radius:18px;color:#effaff;background:linear-gradient(145deg,#28345f,#184465)}.mc-live-balance-card span{font-size:.88rem;font-weight:850;color:#d4e8fa}.mc-live-balance-card strong{font-size:1.65rem;line-height:1.2;font-weight:900}.mc-live-balance-card small{font-size:.78rem;line-height:1.45;color:#d2e8f2}';
+    document.head.appendChild(style);
+  }
+  const real=summary(current);
+  const value=card.querySelector('#mcLiveBalanceValue');
+  const help=card.querySelector('#mcLiveBalanceHelp');
+  if(value)value.textContent=euro.format(real.currentBalance);
+  if(help)help.textContent='Solde réel suivi dans Mes Comptes pour '+monthLabel(current)+'. Ne correspond pas à une consultation bancaire en direct.';
+}
+
 function updateEstimatedCard(){
   ensureEstimatedCard();const e=estimatedMonth(state.currentMonth);
   const strong=document.getElementById('mcEstimatedEnd'),small=document.getElementById('mcEstimateDetails');
@@ -147,6 +177,6 @@ renderSavings=function(){
   const suggest=document.getElementById('savingSuggested');if(suggest)suggest.classList.toggle('negative',false);
 };
 const oldRender=render;
-render=function(){oldRender();updateEstimatedCard();};
+render=function(){oldRender();updateEstimatedCard();updateLiveBalanceCard();};
 render();
 })();
